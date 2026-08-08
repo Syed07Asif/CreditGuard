@@ -19,12 +19,24 @@ checklist).
   passing (up from 23; 19 new), ruff/black clean, verified end-to-end against
   the real 50k-customer Phase 2 dataset (`ds_20260808_547ecf5a`): 100%
   detection rate on all 6 injected error types (manifest asked for ≥95%), and
-  the cleaned output re-validates with zero ERROR violations. **Committed** —
-  see "Validation & cleaning design" below for what it does and one real bug
+  the cleaned output re-validates with zero ERROR violations. **Committed**
+  (`a46bcfc`, "Phase 3: Data validation and cleaning pipeline") — see
+  "Validation & cleaning design" below for what it does and one real bug
   found/fixed along the way.
-- **Next up:** Phase 4 (feature engineering and leakage prevention), per
-  `CLAUDE.md`'s checklist. Phases are strictly sequential — don't start Phase 4
-  work, and don't add stub files for it, until the user actually asks.
+- **Phase 4** (Feature engineering and leakage prevention) — done, all 91
+  tests passing (up from 42; 49 new), ruff/black clean, verified end-to-end
+  against the real 50k-customer Phase 3 clean dataset
+  (`ds_20260808_547ecf5a_clean`): 77 output features, X_train/X_val/X_test =
+  (67724,77)/(14513,77)/(14512,77), all finite, zero target-correlation
+  offenders, temporal split exactly 70/15/15 with non-overlapping date ranges
+  (train 2022-08-08..2024-09-14, val 2024-09-15..2025-02-25, test
+  2025-02-25..2025-08-08). **Not yet committed** as of this note — check
+  `git status`/`git log` before assuming otherwise. See "Feature engineering
+  design" below for the architecture and one real false-positive bug caught
+  by testing.
+- **Next up:** Phase 5 (exploratory data analysis), per `CLAUDE.md`'s
+  checklist. Phases are strictly sequential — don't start Phase 5 work, and
+  don't add stub files for it, until the user actually asks.
 
 This is an educational/portfolio simulation (synthetic data only, not a real
 lending system), built one phase at a time with the user reviewing each phase's
@@ -138,6 +150,49 @@ disk I/O while Docker Desktop was cold-starting, since this repo's path
 folder. Restored by hand. If an empty/placeholder file's location looks wrong
 and you didn't touch it, check this before assuming you (or a tool) broke it.
 
+## Feature engineering design (Phase 4)
+
+`src/creditguard/features/` builds engineered features as composable
+scikit-learn transformers, with `leakage.py` owning both what's forbidden and
+how loans get matched to their point-in-time snapshot:
+
+- **`CleaningAndMergeStep` (pipeline.py) reuses Phase 3's `DataCleaner`
+  unmodified** as the pipeline's literal first stage, composed with
+  `leakage.point_in_time_join` (deterministic, not a fitted statistic) so
+  the rest of the pipeline gets one flat per-loan row. `DataCleaner` being
+  idempotent means feeding it an already-`_clean` dataset (as `build.py`'s
+  `--dataset-version` always is) is a safe no-op — the *same* pipeline object
+  also works unmodified on raw input, useful for Phase 8 serving later.
+- **`point_in_time_join` uses `pd.merge_asof(..., direction="backward",
+  by="customer_id")`** — the right tool for "latest row with as_of_date <=
+  application_date, never joined on customer_id alone."
+- **Two-phase fit in `build.py`, not one opaque `pipeline.fit_transform`
+  call:** the target (`default_12m`) only has a well-defined row order once
+  the merge step has run (row count/order can change — `DataCleaner` drops
+  quarantined rows), so `build.py` fits `pipeline.named_steps
+  ["cleaning_and_merge"]` first, aligns `y` by `loan_id` (not position), then
+  fits the remainder via `pipeline[1:]` — which shares the same underlying
+  step objects (sklearn Pipeline slicing doesn't clone), so `pipeline` itself
+  ends up fully fitted and ready to `joblib.dump`.
+- **Real false-positive bug, caught by running the actual pipeline, not by
+  inspection:** the spec's literal forbidden-pattern list includes a bare
+  `^post_`, meant for `post_disbursement_*`. That collided with this phase's
+  *own* required feature, `post_loan_dti` (entirely pre-decision — the
+  projected DTI if the loan being applied for is approved), which also starts
+  with `post_`. Fixed by narrowing the pattern to `^post_disbursement_`. A
+  reminder that an overly broad leakage screen is a real bug (a false
+  positive that would silently corrupt or block a legitimate feature), not
+  just extra caution — this is exactly why `tests/test_leakage.py` asserts
+  BOTH that real offenders are still caught AND that `post_loan_dti` passes
+  clean.
+- **`RatioFeatures`/`BehaviouralFeatures` implement `get_feature_names_out`
+  as deterministic, non-data-dependent name lists** (not by re-deriving them
+  from a fitted state) specifically so `Pipeline.get_feature_names_out()`
+  chains all the way through — including `CleaningAndMergeStep`, whose
+  output columns are fixed by `point_in_time_join`'s hardcoded column
+  selection (`leakage.MERGED_FRAME_COLUMNS`), not by what the input data
+  happens to contain.
+
 ## How this project likes to be verified
 
 - When a phase's acceptance criteria name a specific scale (row count, customer
@@ -151,5 +206,5 @@ and you didn't touch it, check this before assuming you (or a tool) broke it.
   when the operation could plausibly hang. Prefer designs where partial progress
   is visibly committed/observable as it happens over designs that are only
   correct-looking once complete and opaque until then.
-- Only commit to git when explicitly asked — true for Phase 1, Phase 2 and
-  Phase 3 alike (each was verified first, committed only once the user asked).
+- Only commit to git when explicitly asked — true for every phase so far
+  (each was verified first, committed only once the user asked).

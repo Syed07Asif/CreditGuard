@@ -1,0 +1,85 @@
+# Feature engineering configuration for CreditGuard Phase 4.
+# Every tunable the feature pipeline uses lives here; nothing is hard-coded in
+# src/creditguard/features/*.py. See docs/feature_dictionary.md for the prose
+# explanation of every output feature.
+
+random_seed: 42
+
+behavioural:
+  # Number of quantile bins for age_band/tenure_band/income_band, fit on
+  # training data only (creditguard.features.behavioural.BehaviouralFeatures).
+  n_quantile_bins: 5
+
+preprocessing:
+  # OneHotEncoder groups any categorical level below this frequency into
+  # sklearn's "infrequent" bucket, so a rare category can't blow up the
+  # one-hot width or destabilise the encoding on a small val/test split.
+  min_frequency: 0.01
+
+# Column roles for the ColumnTransformer built by
+# creditguard.features.encoders.build_preprocessor. Every name here must
+# exist on the frame produced by the ratios + behavioural pipeline stages
+# (see creditguard.features.leakage.MERGED_FRAME_COLUMNS,
+# creditguard.features.ratios.RATIO_OUTPUT_COLUMNS and
+# creditguard.features.behavioural.BEHAVIOURAL_OUTPUT_COLUMNS).
+feature_columns:
+  numeric:
+    # -- point-in-time source columns (customers / loan_applications /
+    #    financial_profiles / credit_history snapshot) --
+    - age
+    - dependents
+    - employment_years
+    - annual_income
+    - city_tier
+    - loan_amount
+    - loan_tenure_months
+    - interest_rate
+    - monthly_income
+    - monthly_expenses
+    - existing_loan_count
+    - existing_loan_amount
+    - monthly_emi
+    - savings_balance
+    - total_assets
+    - total_liabilities
+    - credit_history_months
+    - num_credit_accounts
+    - total_credit_limit
+    - total_outstanding
+    - previous_defaults
+    - late_payments_12m
+    - missed_payments_12m
+    - active_loans
+    - closed_loans
+    # -- ratio features (creditguard.features.ratios) --
+    - dti
+    - emi_to_income
+    - credit_utilization
+    - loan_to_income
+    - proposed_emi
+    - post_loan_dti
+    - savings_to_income
+    - net_worth
+    - leverage_ratio
+    - disposable_income
+    - months_of_runway
+    # -- behavioural features (creditguard.features.behavioural) --
+    - delinquency_rate
+    - has_prior_default
+    - credit_history_years
+    - accounts_per_year
+    - active_loan_ratio
+    - employment_stability
+    - income_per_dependent
+  categorical:
+    - gender
+    - marital_status
+    - education
+    - employment_type
+    - loan_type
+    - loan_purpose
+  ordinal:
+    - utilization_band
+    - age_band
+    - tenure_band
+    - income_band
