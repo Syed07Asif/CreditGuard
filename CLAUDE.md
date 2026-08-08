@@ -177,7 +177,7 @@ creditguard/
 
 - [x] **Phase 1** — Foundation, configuration and database
 - [x] **Phase 2** — Synthetic data generation and ingestion
-- [ ] **Phase 3** — Data validation and cleaning pipeline
+- [x] **Phase 3** — Data validation and cleaning pipeline
 - [ ] **Phase 4** — Feature engineering and leakage prevention
 - [ ] **Phase 5** — Exploratory data analysis
 - [ ] **Phase 6** — Model training, imbalance handling and evaluation

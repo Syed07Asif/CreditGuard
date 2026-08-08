@@ -1,0 +1,233 @@
+# Data validation and cleaning configuration for CreditGuard Phase 3.
+# Every threshold the validation engine and cleaner use lives here; nothing is
+# hard-coded in src/creditguard/validation/*.py. See docs/data_quality.md for
+# the prose explanation of the design.
+#
+# Rule severities:
+#   ERROR   - the value is physically/structurally impossible or cannot be
+#             reconciled; if still present after cleaning's repair steps
+#             (clip/dedup/impute), the row is quarantined and dropped from
+#             the modelling set.
+#   WARNING - implausible or noteworthy, but repairable (imputation) or not
+#             worth dropping a row over. Still logged to data_quality_issues.
+
+rules:
+  missing_value:
+    # threshold: minimum fraction of missing values in the column before the
+    # rule reports anything at all (below it, treated as noise).
+    - table: financial_profiles
+      column: total_assets
+      threshold: 0.0
+      severity: WARNING
+    - table: customers
+      column: annual_income
+      threshold: 0.0
+      severity: ERROR
+    - table: customers
+      column: monthly_income
+      threshold: 0.0
+      severity: ERROR
+    - table: customers
+      column: age
+      threshold: 0.0
+      severity: ERROR
+
+  duplicate_record:
+    - table: customers
+      keys: [customer_id]
+      severity: ERROR
+    - table: loan_applications
+      keys: [loan_id]
+      severity: ERROR
+    - table: customers
+      exact: true
+      severity: WARNING
+    - table: loan_applications
+      exact: true
+      severity: WARNING
+
+  numeric_range:
+    - table: customers
+      column: dependents
+      min: 0
+      max: 10
+      severity: WARNING
+    - table: customers
+      column: city_tier
+      min: 1
+      max: 3
+      severity: WARNING
+    - table: loan_applications
+      column: loan_tenure_months
+      min: 1
+      max: 600
+      severity: WARNING
+    - table: loan_applications
+      column: interest_rate
+      min: 0
+      max: 40
+      severity: WARNING
+    - table: credit_history
+      column: credit_history_months
+      min: 0
+      max: 600
+      severity: WARNING
+    - table: credit_history
+      column: num_credit_accounts
+      min: 0
+      max: 50
+      severity: WARNING
+
+  negative_financial:
+    - table: customers
+      columns: [annual_income, monthly_income]
+      severity: ERROR
+    - table: financial_profiles
+      columns:
+        - monthly_income
+        - monthly_expenses
+        - existing_loan_amount
+        - monthly_emi
+        - savings_balance
+        - total_assets
+        - total_liabilities
+      severity: ERROR
+    - table: credit_history
+      columns: [total_credit_limit, total_outstanding]
+      severity: ERROR
+
+  impossible_age:
+    table: customers
+    column: age
+    min: 18
+    max: 100
+    severity: ERROR
+
+  invalid_date:
+    - table: loan_applications
+      columns: [application_date, decision_date]
+      order_pairs: [[application_date, decision_date]]
+      allow_future: false
+      severity: ERROR
+    - table: loan_outcomes
+      columns: [outcome_observed_date]
+      allow_future: false
+      severity: WARNING
+    - table: financial_profiles
+      columns: [as_of_date]
+      allow_future: false
+      severity: WARNING
+    - table: credit_history
+      columns: [as_of_date]
+      allow_future: false
+      severity: WARNING
+
+  credit_utilization:
+    table: credit_history
+    min: 0.0
+    max: 1.5
+    outstanding_over_limit_margin: 1.5
+    severity: ERROR
+
+  income_consistency:
+    table: customers
+    annual_income_column: annual_income
+    monthly_income_column: monthly_income
+    tolerance_fraction: 0.1
+    severity: ERROR
+
+  expense_consistency:
+    table: financial_profiles
+    income_multiple: 1.5
+    severity: WARNING
+
+  orphan_record:
+    - child_table: loan_applications
+      parent_table: customers
+      key: customer_id
+      severity: ERROR
+    - child_table: financial_profiles
+      parent_table: customers
+      key: customer_id
+      severity: ERROR
+    - child_table: credit_history
+      parent_table: customers
+      key: customer_id
+      severity: ERROR
+    - child_table: loan_outcomes
+      parent_table: loan_applications
+      key: loan_id
+      severity: ERROR
+
+  employment_plausibility:
+    table: customers
+    min_working_age: 16
+    severity: WARNING
+
+  temporal_leakage:
+    - snapshot_table: financial_profiles
+      loan_table: loan_applications
+      severity: ERROR
+    - snapshot_table: credit_history
+      loan_table: loan_applications
+      severity: ERROR
+
+# Cleaning pipeline parameters (src/creditguard/validation/cleaning.py).
+cleaning:
+  dedup:
+    - table: customers
+      keys: [customer_id]
+    - table: loan_applications
+      keys: [loan_id]
+
+  # Physically impossible values are clipped into these bounds (not dropped).
+  # A null bound means "no clip on that side".
+  clip:
+    - { table: customers, column: age, min: 18, max: 100 }
+    - { table: customers, column: annual_income, min: 0, max: null }
+    - { table: customers, column: monthly_income, min: 0, max: null }
+    - { table: financial_profiles, column: monthly_income, min: 0, max: null }
+    - { table: financial_profiles, column: monthly_expenses, min: 0, max: null }
+    - { table: financial_profiles, column: existing_loan_amount, min: 0, max: null }
+    - { table: financial_profiles, column: monthly_emi, min: 0, max: null }
+    - { table: financial_profiles, column: savings_balance, min: 0, max: null }
+    - { table: financial_profiles, column: total_assets, min: 0, max: null }
+    - { table: financial_profiles, column: total_liabilities, min: 0, max: null }
+    - { table: credit_history, column: total_credit_limit, min: 0, max: null }
+    - { table: credit_history, column: total_outstanding, min: 0, max: null }
+    - { table: credit_history, column: credit_utilization, min: 0, max: 1.5 }
+
+  # Extreme financial outliers, winsorised (not deleted) at these percentiles.
+  # Bounds are fit on training data only and persisted with the transformer.
+  winsorize:
+    lower_percentile: 0.01
+    upper_percentile: 0.99
+    columns:
+      - { table: customers, column: annual_income }
+      - { table: customers, column: monthly_income }
+      - { table: financial_profiles, column: monthly_income }
+      - { table: financial_profiles, column: monthly_expenses }
+      - { table: financial_profiles, column: savings_balance }
+      - { table: financial_profiles, column: total_assets }
+      - { table: financial_profiles, column: total_liabilities }
+      - { table: credit_history, column: total_credit_limit }
+      - { table: credit_history, column: total_outstanding }
+      - { table: loan_applications, column: loan_amount }
+
+  impute:
+    # Numeric: median imputation fit on training data only, plus a
+    # `<col>_was_missing` boolean indicator column.
+    numeric:
+      - { table: financial_profiles, column: total_assets }
+      - { table: customers, column: annual_income }
+      - { table: customers, column: monthly_income }
+      - { table: customers, column: employment_years }
+    # Categorical: missing values become the explicit 'UNKNOWN' category.
+    categorical:
+      - { table: customers, column: gender }
+      - { table: customers, column: marital_status }
+      - { table: customers, column: education }
+      - { table: customers, column: employment_type }
+      - { table: loan_applications, column: loan_type }
+      - { table: loan_applications, column: loan_purpose }
+      - { table: loan_applications, column: status }

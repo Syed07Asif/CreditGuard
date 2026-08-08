@@ -13,12 +13,18 @@ checklist).
   (`0bbdfcc`, "Phase 1: Foundation, configuration and database").
 - **Phase 2** (Synthetic data generation and ingestion) — done, all 23 tests
   passing, ruff/black clean, verified end-to-end at full 50k-customer scale
-  (generation 2.8s, ingest ~40min, realised default rate 0.1105). **Not yet
-  committed** as of this note — check `git status`/`git log` before assuming
-  otherwise, this may be stale by the time you read it.
-- **Next up:** Phase 3 (data validation and cleaning pipeline), per `CLAUDE.md`'s
-  checklist. Phases are strictly sequential — don't start Phase 3 work, and don't
-  add stub files for it, until the user actually asks.
+  (generation 2.8s, ingest ~40min, realised default rate 0.1105). **Committed**
+  (`f923f94`, "Phase 2: Synthetic data generation and ingestion").
+- **Phase 3** (Data validation and cleaning pipeline) — done, all 42 tests
+  passing (up from 23; 19 new), ruff/black clean, verified end-to-end against
+  the real 50k-customer Phase 2 dataset (`ds_20260808_547ecf5a`): 100%
+  detection rate on all 6 injected error types (manifest asked for ≥95%), and
+  the cleaned output re-validates with zero ERROR violations. **Committed** —
+  see "Validation & cleaning design" below for what it does and one real bug
+  found/fixed along the way.
+- **Next up:** Phase 4 (feature engineering and leakage prevention), per
+  `CLAUDE.md`'s checklist. Phases are strictly sequential — don't start Phase 4
+  work, and don't add stub files for it, until the user actually asks.
 
 This is an educational/portfolio simulation (synthetic data only, not a real
 lending system), built one phase at a time with the user reviewing each phase's
@@ -86,6 +92,52 @@ large FK-linked tables again, reuse this batched-commit + bisection pattern.
 
 ---
 
+## Validation & cleaning design (Phase 3)
+
+`src/creditguard/validation/` splits observation from repair on purpose:
+`rules.py`/`engine.py` only report violations (never mutate data); `cleaning.py`
+is the only module that transforms data, and every repair it makes is logged.
+
+**Validates the raw parquet dataset, not the database.** Five of Phase 2's six
+injected error types violate a DB CHECK/PK/NOT NULL constraint, so
+`creditguard.data.ingest` already quarantines those rows *out of* the database
+before Phase 3 ever runs. Only `inconsistent_income` survives ingest
+unmodified. So `validate`/`clean` both take `--dataset-version` and read
+`data/raw/<version>/` directly (like `generator`/`ingest` do) — validating
+against the database would silently miss 5 of 6 error types and make the
+95%-detection acceptance criterion unmeasurable.
+
+**Severity decides repair vs. drop.** ERROR violations that clip/dedup can fix
+(`ImpossibleAgeRule`, `NegativeFinancialRule`, `CreditUtilizationRule`,
+`DuplicateRecordRule`) get repaired in `cleaning.py` and are never dropped.
+What's left after repair (`OrphanRecordRule`, `TemporalLeakageRule`,
+`InvalidDateRule`, `IncomeConsistencyRule` — none of which a clip can fix) gets
+quarantined and dropped from the modelling set, cascaded to dependent tables
+for referential integrity, but kept in `data_quality_issues`.
+
+**Real bug found and fixed only by testing at real scale (again):** the
+`DataCleaner.fit()` step originally computed winsorize percentile bounds and
+imputation medians from the *raw* input (including exact-duplicate rows and
+unclipped negative values). On a tiny hand-built test frame this visibly
+corrupted a legitimate value (a repaired `0` income got winsorized back up,
+which then broke income-consistency and got a customer wrongly dropped) — the
+fix was to fit statistics on dedup+clip-repaired data instead of raw data
+(still never touching `transform`-time data, so still "fit on train only").
+Small-scale hand-built frames caught this because percentiles on n≈3-4 samples
+are extremely sensitive to outliers; worth remembering for Phase 4+ if fitting
+statistics on injected-dirty data again.
+
+**Note on the CreditGuard repo living under OneDrive:** mid-session, a
+pre-existing, unrelated file (`src/creditguard/pipeline/.gitkeep`, from the
+Phase 1 skeleton commit) was found physically relocated to
+`src/creditguard/validation/pipeline/.gitkeep` — `git status` showed it as
+deleted+untracked, with no corresponding edit/write by the agent to that path.
+Best guess: OneDrive sync/on-demand reconciliation, triggered by the heavy
+disk I/O while Docker Desktop was cold-starting, since this repo's path
+(`C:\Users\asiff\OneDrive\Documents\CreditGuard`) is inside the OneDrive sync
+folder. Restored by hand. If an empty/placeholder file's location looks wrong
+and you didn't touch it, check this before assuming you (or a tool) broke it.
+
 ## How this project likes to be verified
 
 - When a phase's acceptance criteria name a specific scale (row count, customer
@@ -99,6 +151,5 @@ large FK-linked tables again, reuse this batched-commit + bisection pattern.
   when the operation could plausibly hang. Prefer designs where partial progress
   is visibly committed/observable as it happens over designs that are only
   correct-looking once complete and opaque until then.
-- Only commit to git when explicitly asked — true for both Phase 1 (committed
-  only after being asked) and Phase 2 (left uncommitted, verified only, as of
-  this note).
+- Only commit to git when explicitly asked — true for Phase 1, Phase 2 and
+  Phase 3 alike (each was verified first, committed only once the user asked).
