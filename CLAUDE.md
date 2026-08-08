@@ -179,7 +179,7 @@ creditguard/
 - [x] **Phase 2** — Synthetic data generation and ingestion
 - [x] **Phase 3** — Data validation and cleaning pipeline
 - [x] **Phase 4** — Feature engineering and leakage prevention
-- [ ] **Phase 5** — Exploratory data analysis
+- [x] **Phase 5** — Exploratory data analysis
 - [ ] **Phase 6** — Model training, imbalance handling and evaluation
 - [ ] **Phase 7** — Credit scoring engine, risk categories and explainability
 - [ ] **Phase 8** — FastAPI real-time scoring service

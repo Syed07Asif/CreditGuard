@@ -1,0 +1,8 @@
+{
+  "mean_default_rate": 0.11121324065504894,
+  "std_default_rate": 0.007615025779535768,
+  "flagged_months": [
+    "2024-09"
+  ],
+  "regime_shift_detected": true
+}

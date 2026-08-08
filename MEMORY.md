@@ -30,13 +30,24 @@ checklist).
   (67724,77)/(14513,77)/(14512,77), all finite, zero target-correlation
   offenders, temporal split exactly 70/15/15 with non-overlapping date ranges
   (train 2022-08-08..2024-09-14, val 2024-09-15..2025-02-25, test
-  2025-02-25..2025-08-08). **Not yet committed** as of this note — check
-  `git status`/`git log` before assuming otherwise. See "Feature engineering
-  design" below for the architecture and one real false-positive bug caught
-  by testing.
-- **Next up:** Phase 5 (exploratory data analysis), per `CLAUDE.md`'s
-  checklist. Phases are strictly sequential — don't start Phase 5 work, and
-  don't add stub files for it, until the user actually asks.
+  2025-02-25..2025-08-08). **Committed** (`0f85195`, "Phase 4: Feature
+  engineering and leakage prevention"). See "Feature engineering design"
+  below for the architecture and one real false-positive bug caught by
+  testing.
+- **Phase 5** (Exploratory data analysis) — done, all 108 tests passing (up
+  from 91; 17 new), ruff/black clean, verified end-to-end against the real
+  96,749-loan Phase 4 population (`ds_20260808_547ecf5a_clean`,
+  train+val+test combined): 73 figures under `reports/figures/eda/` (≥20
+  required), every summary table under `reports/eda/tables/`, notebook
+  executes top to bottom with zero errors, `reports/eda/findings.md` has 12
+  evidenced findings plus the "Decisions for Phase 6" section. **Not yet
+  committed** as of this note — check `git status`/`git log` before assuming
+  otherwise. See "EDA design" below for a real IV-computation bug caught and
+  fixed during this phase (not before it).
+- **Next up:** Phase 6 (model training, imbalance handling and evaluation),
+  per `CLAUDE.md`'s checklist. Phases are strictly sequential — don't start
+  Phase 6 work, and don't add stub files for it, until the user actually
+  asks.
 
 This is an educational/portfolio simulation (synthetic data only, not a real
 lending system), built one phase at a time with the user reviewing each phase's
@@ -192,6 +203,66 @@ how loans get matched to their point-in-time snapshot:
   output columns are fixed by `point_in_time_join`'s hardcoded column
   selection (`leakage.MERGED_FRAME_COLUMNS`), not by what the input data
   happens to contain.
+
+## EDA design (Phase 5)
+
+`src/creditguard/eda/` is a thin, importable analysis layer
+(`univariate.py`/`bivariate.py`/`risk_analysis.py`/`plots.py`) plus one
+headless orchestrator (`run_eda.py`); `notebooks/01_exploratory_data_
+analysis.ipynb` only calls into it — it is a narrative wrapper, not a second
+implementation.
+
+- **`run_eda.build_eda_frame` reuses Phase 4's own pipeline stages
+  (`CleaningAndMergeStep`, `RatioFeatures`, `BehaviouralFeatures`) but stops
+  one stage short of the final `ColumnTransformer`.** EDA wants raw units
+  (age in years, income in currency, ratios as ratios), not a fitted
+  `StandardScaler`'s z-scores or one-hot columns, so it composes the same
+  fit-on-train-only stages by hand instead of calling
+  `features.pipeline.build_feature_pipeline` end to end.
+- **Where each analysis runs is deliberate:** univariate distributions,
+  categorical frequencies and band-level default rates run on the **full**
+  train+val+test population (portfolio-level view, also what the Phase 9
+  dashboard will want); IV/WOE, the correlation matrix and point-biserial
+  correlations run on the **train split only**, since they exist to inform
+  what Phase 6 actually fits. The temporal regime-shift check runs on the
+  full population — the whole point is to see every month, not just the
+  training months. See the module docstring in `run_eda.py` for the full
+  reasoning.
+- **Real bug caught by running IV/WOE against the actual 96,749-loan
+  population, not by inspection:** the first `iv_table` implementation
+  quantile-decile-binned every numeric column uniformly. For a zero-inflated
+  low-cardinality bureau field like `previous_defaults` (64% of customers at
+  0), every decile cut point collapses onto the same value and
+  `duplicates="drop"` merges them into a single bin spanning the whole
+  population — silently reporting IV = 0.0 ("useless") for a field
+  `docs/feature_dictionary.md` documents as "the strongest single bureau
+  risk signal." Fixed by routing any numeric column with ≤40 distinct values
+  through the same exact-value WOE/IV path used for categoricals instead of
+  quantile deciles (`risk_analysis.LOW_CARDINALITY_THRESHOLD`) — this
+  recovered `previous_defaults`'s real IV of 0.106 ("medium") with a clean
+  monotone default-rate gradient. The 40 cutoff isn't arbitrary: on the real
+  data there's a clean gap between count-like fields (2 to 32 distinct
+  values) and genuinely continuous ones (age at 52 distinct values and up).
+  A reminder that a binning strategy correct for continuous features can be
+  silently wrong for discrete ones, and that this class of bug only shows up
+  against real data shape, not a synthetic/tiny test fixture. See
+  `reports/eda/findings.md` finding 5 for the write-up, and
+  `tests/test_eda_risk_analysis.py::test_iv_table_routes_low_cardinality_numeric_through_categorical_binning`
+  for the regression test.
+- **`plots._save` closes each figure after saving** (`plt.close(fig)`) —
+  `run_eda` renders 73 figures in one process and would otherwise trip
+  matplotlib's "too many open figures" warning and leak memory. The returned
+  `Figure` object stays fully usable afterwards (a notebook cell can still
+  display it), since closing only detaches it from pyplot's global registry,
+  not from the caller's own reference to it.
+- **Two pytest processes must never run against the test DB at the same
+  time.** Running the full suite in the background while re-running a subset
+  in a second terminal produced a real Postgres `DeadlockDetected` on the
+  autouse `TRUNCATE ... RESTART IDENTITY CASCADE` fixture (two truncates
+  racing), plus a flaky-looking `test_truncate_reingest_is_idempotent`
+  failure in an unrelated Phase 2 test — both vanished when the suite was
+  re-run alone. Not a code bug; a reminder specific to this repo's
+  autouse-truncate-per-test fixture design (`tests/conftest.py`).
 
 ## How this project likes to be verified
 

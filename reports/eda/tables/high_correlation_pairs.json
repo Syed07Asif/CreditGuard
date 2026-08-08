@@ -1,0 +1,102 @@
+[
+  {
+    "feature_a": "credit_history_months",
+    "feature_b": "credit_history_years",
+    "r": 1.0000000000000093
+  },
+  {
+    "feature_a": "existing_loan_amount",
+    "feature_b": "monthly_emi",
+    "r": 0.9957706936874529
+  },
+  {
+    "feature_a": "annual_income",
+    "feature_b": "monthly_income",
+    "r": 0.9953343825306008
+  },
+  {
+    "feature_a": "total_liabilities",
+    "feature_b": "total_outstanding",
+    "r": 0.9916002965527108
+  },
+  {
+    "feature_a": "annual_income",
+    "feature_b": "monthly_expenses",
+    "r": 0.9329112390267278
+  },
+  {
+    "feature_a": "monthly_income",
+    "feature_b": "monthly_expenses",
+    "r": 0.9298351030320864
+  },
+  {
+    "feature_a": "age",
+    "feature_b": "credit_history_years",
+    "r": 0.9188143071524424
+  },
+  {
+    "feature_a": "age",
+    "feature_b": "credit_history_months",
+    "r": 0.9188143071524398
+  },
+  {
+    "feature_a": "savings_to_income",
+    "feature_b": "months_of_runway",
+    "r": 0.9090317966279421
+  },
+  {
+    "feature_a": "previous_defaults",
+    "feature_b": "has_prior_default",
+    "r": 0.8404214446827306
+  },
+  {
+    "feature_a": "annual_income",
+    "feature_b": "total_credit_limit",
+    "r": 0.8360862810487664
+  },
+  {
+    "feature_a": "employment_years",
+    "feature_b": "credit_history_years",
+    "r": 0.8353076147561334
+  },
+  {
+    "feature_a": "employment_years",
+    "feature_b": "credit_history_months",
+    "r": 0.8353076147561223
+  },
+  {
+    "feature_a": "monthly_income",
+    "feature_b": "total_credit_limit",
+    "r": 0.8322009330973558
+  },
+  {
+    "feature_a": "loan_tenure_months",
+    "feature_b": "loan_to_income",
+    "r": 0.823381494526574
+  },
+  {
+    "feature_a": "age",
+    "feature_b": "employment_years",
+    "r": 0.813076917407136
+  },
+  {
+    "feature_a": "total_liabilities",
+    "feature_b": "total_credit_limit",
+    "r": 0.8056815965858529
+  },
+  {
+    "feature_a": "closed_loans",
+    "feature_b": "credit_history_years",
+    "r": 0.803149009623529
+  },
+  {
+    "feature_a": "credit_history_months",
+    "feature_b": "closed_loans",
+    "r": 0.8031490096235108
+  },
+  {
+    "feature_a": "existing_loan_count",
+    "feature_b": "active_loans",
+    "r": 0.8020028194803182
+  }
+]
