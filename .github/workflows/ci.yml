@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: creditguard_test
+          POSTGRES_USER: creditguard
+          POSTGRES_PASSWORD: creditguard
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U creditguard -d creditguard_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DB_HOST: localhost
+      DB_PORT: 5432
+      DB_NAME: creditguard_test
+      DB_USER: creditguard
+      DB_PASSWORD: creditguard
+      DB_SCHEMA: public
+      MLFLOW_TRACKING_URI: http://localhost:5000
+      API_KEY: ci-test-key
+      ENV: test
+      SEED: 42
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Lint (ruff)
+        run: ruff check .
+
+      - name: Format check (black)
+        run: black --check .
+
+      - name: Run tests
+        run: pytest -q
