@@ -9,6 +9,13 @@ services:
       POSTGRES_PASSWORD: ${DB_PASSWORD:-changeme}
     ports:
       - "${DB_PORT:-5432}:5432"
+    # Bulk ingest loads FK-child rows (financial_profiles, credit_history, ...)
+    # tens of thousands at a time inside a single transaction; each foreign-key
+    # check takes a row lock that lives until commit, which can exceed Postgres's
+    # default lock table capacity (max_locks_per_transaction=64). Raised here per
+    # Postgres's own documented fix for "out of shared memory ... increase
+    # max_locks_per_transaction".
+    command: ["postgres", "-c", "max_locks_per_transaction=256"]
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:

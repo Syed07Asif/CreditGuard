@@ -176,7 +176,7 @@ creditguard/
 ## 6. Build phases
 
 - [x] **Phase 1** — Foundation, configuration and database
-- [ ] **Phase 2** — Synthetic data generation and ingestion
+- [x] **Phase 2** — Synthetic data generation and ingestion
 - [ ] **Phase 3** — Data validation and cleaning pipeline
 - [ ] **Phase 4** — Feature engineering and leakage prevention
 - [ ] **Phase 5** — Exploratory data analysis
