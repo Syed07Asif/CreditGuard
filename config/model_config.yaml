@@ -1,0 +1,97 @@
+# Model training configuration for CreditGuard Phase 6.
+# Every tunable the training/search/imbalance/calibration/threshold code uses
+# lives here; nothing is hard-coded in src/creditguard/models/*.py.
+
+random_seed: 42
+
+# StratifiedKFold search over each model family's param_grid, scored on
+# average_precision (PR-AUC) -- never accuracy, see evaluate.select_best_model.
+search:
+  strategy: random
+  n_iter: 20
+  cv_folds: 5
+  scoring: average_precision
+
+models:
+  logistic_regression:
+    # L2 and elastic-net only (no bare L1) -- saga is the one solver that
+    # supports both penalties plus class_weight, per the Phase 6 brief.
+    fixed_params:
+      solver: saga
+      max_iter: 5000
+      random_state: 42
+    param_grid:
+      C: [0.001, 0.01, 0.1, 1.0, 10.0, 100.0]
+      penalty: [l2, elasticnet]
+      l1_ratio: [0.0, 0.3, 0.5, 0.7, 1.0]  # only read when penalty == elasticnet
+
+  random_forest:
+    fixed_params:
+      random_state: 42
+      n_jobs: -1
+    param_grid:
+      n_estimators: [100, 200, 400, 600]
+      max_depth: [4, 6, 8, 12, null]
+      min_samples_leaf: [1, 5, 10, 20]
+      max_features: [sqrt, log2, 0.5]
+
+  xgboost:
+    fixed_params:
+      random_state: 42
+      eval_metric: aucpr
+      n_jobs: -1
+      # Force CPU: XGBoost's device auto-detection picks up a partial/broken
+      # CUDA install on this machine (no working GPU) and crashes with
+      # "Check failed: err == cudaGetLastError()" inside QuantileDMatrix
+      # construction. Explicit device="cpu" sidesteps auto-detection
+      # entirely, which also makes training reproducible on machines with
+      # no GPU at all -- the common case for this project.
+      device: cpu
+    # Sampled during the CV search (no early stopping inside CV -- each fold's
+    # held-out data is internal to sklearn's CV loop, not our real val split).
+    # The winning params are then refit once on the full train split with
+    # early stopping against the real validation split (early_stopping_rounds
+    # below), so the *final* model's n_estimators is early-stopped even
+    # though the search itself explores a fixed grid of n_estimators.
+    param_grid:
+      n_estimators: [100, 200, 400]
+      max_depth: [3, 4, 6, 8]
+      learning_rate: [0.01, 0.05, 0.1, 0.2]
+      subsample: [0.6, 0.8, 1.0]
+      colsample_bytree: [0.6, 0.8, 1.0]
+      min_child_weight: [1, 5, 10]
+      gamma: [0.0, 0.1, 0.5, 1.0]
+      reg_lambda: [0.1, 1.0, 5.0, 10.0]
+    early_stopping_rounds: 30
+
+# Every strategy the imbalance experiment grid compares, per model family.
+# "class_weight" means class_weight="balanced" for logistic/random_forest and
+# its XGBoost-native equivalent, scale_pos_weight = n_negative / n_positive,
+# for xgboost -- same idea, different parameter name per library.
+imbalance:
+  strategies: [none, class_weight, smote, random_undersampling, smote_tomek]
+  # Fixed precision operating point for the "recall@fixed-precision" column
+  # in reports/models/imbalance_comparison.md.
+  recall_at_precision: 0.5
+
+# Cost of a false negative (approving a defaulter) must dominate the cost of
+# a false positive (rejecting a good applicant) -- credit losses are far more
+# expensive than the opportunity cost of a declined good loan.
+cost_matrix:
+  cost_false_negative: 10.0
+  cost_false_positive: 1.0
+  cost_true_positive: 0.0
+  cost_true_negative: 0.0
+
+calibration:
+  methods: [isotonic, sigmoid]
+
+evaluation:
+  # Human-readable segment columns (from the pre-ColumnTransformer frame, not
+  # one-hot/ordinal-encoded) used for per-segment metric breakdowns.
+  segment_columns: [loan_type, income_band, age_band]
+  lift_gains_bins: 10
+  cv_folds: 5
+
+mlflow:
+  experiment_name: creditguard

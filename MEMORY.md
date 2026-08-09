@@ -40,14 +40,29 @@ checklist).
   train+val+test combined): 73 figures under `reports/figures/eda/` (≥20
   required), every summary table under `reports/eda/tables/`, notebook
   executes top to bottom with zero errors, `reports/eda/findings.md` has 12
-  evidenced findings plus the "Decisions for Phase 6" section. **Not yet
+  evidenced findings plus the "Decisions for Phase 6" section. **Committed**
+  (`804c09f`, "Phase 5: Exploratory data analysis"). See "EDA design" below
+  for a real IV-computation bug caught and fixed during this phase (not
+  before it).
+- **Phase 6** (Model training, imbalance handling and evaluation) — done,
+  all 143 tests passing (up from 108; 35 new), ruff/black clean, verified
+  end-to-end at real 96,749-loan scale. Leaderboard: logistic_regression
+  (PR-AUC 0.5464) beat xgboost (0.5405) and random_forest (0.5182) on the
+  validation split — the interpretable baseline won outright, not just
+  stayed competitive. Test-set (14,512 loans, calibrated model, threshold
+  0.084): ROC-AUC 0.8770 (≥0.75 required), PR-AUC 0.5450 (~4.9x the 11.10%
+  base rate), calibration slope 0.9997 (0.9-1.1 required). Registered as
+  `logistic_regression` v1.0.0, exactly one `is_active=true` row. **Not yet
   committed** as of this note — check `git status`/`git log` before assuming
-  otherwise. See "EDA design" below for a real IV-computation bug caught and
-  fixed during this phase (not before it).
-- **Next up:** Phase 6 (model training, imbalance handling and evaluation),
-  per `CLAUDE.md`'s checklist. Phases are strictly sequential — don't start
-  Phase 6 work, and don't add stub files for it, until the user actually
-  asks.
+  otherwise. See "Model training design" below for two real bugs caught and
+  fixed during this phase (an XGBoost/CUDA multiprocessing race, and a
+  fresh-Postgres-volume test-database gap), and for the honest imbalance
+  comparison result (class-weighting/resampling barely helped recall here
+  while visibly hurting raw calibration).
+- **Next up:** Phase 7 (credit scoring engine, risk categories and
+  explainability), per `CLAUDE.md`'s checklist. Phases are strictly
+  sequential — don't start Phase 7 work, and don't add stub files for it,
+  until the user actually asks.
 
 This is an educational/portfolio simulation (synthetic data only, not a real
 lending system), built one phase at a time with the user reviewing each phase's
@@ -263,6 +278,93 @@ implementation.
   failure in an unrelated Phase 2 test — both vanished when the suite was
   re-run alone. Not a code bug; a reminder specific to this repo's
   autouse-truncate-per-test fixture design (`tests/conftest.py`).
+
+## Model training design (Phase 6)
+
+`src/creditguard/models/` mirrors the same layering discipline as prior
+phases: `base.py` defines `BaseCreditModel` so `logistic.py`/
+`random_forest.py`/`xgboost_model.py` are interchangeable; `evaluate.py` is
+the single metric suite everything else reports through (CV, per-segment,
+imbalance comparisons alike); `imbalance.py`/`calibration.py`/`threshold.py`
+are independent stages applied to the winning model in that order;
+`tracking.py` (MLflow) and `registry.py` (`model_registry`) observe the
+process without feeding back into it; `train.py` is the CLI that ties it
+together.
+
+- **`train.py` reuses Phase 4's own pipeline components directly** (not
+  pre-built `X_*.parquet` files) so it needs only the clean dataset version
+  on disk, and deliberately stops one stage before the final
+  `ColumnTransformer` so it can keep the pre-encoding frame
+  (`train_frame`/`val_frame`/`test_frame`) alongside the numeric matrices,
+  row-aligned by construction — `evaluate.per_segment_metrics` needs
+  human-readable `loan_type`/`age_band`/`income_band` values that don't
+  survive one-hot/ordinal encoding.
+- **`evaluate.select_best_model` refuses `metric="accuracy"` in code, not
+  just by convention** (FR-010) — with an 11.10% default rate, predicting
+  "no default" for everyone scores ~89% accuracy while having zero
+  discriminatory power.
+- **Real bug, caught only by running the actual 67,724-row training set
+  through `RandomizedSearchCV(n_jobs=-1)`, not by smaller-scale testing:**
+  XGBoost fits inside separate joblib worker *processes* crashed with
+  `XGBoostError: Check failed: err == cudaGetLastError()` on this machine —
+  reproducible even with `device="cpu"` and `CUDA_VISIBLE_DEVICES=""` (both
+  otherwise-correct fixes that didn't touch the actual cause). Root cause:
+  several worker processes probing this machine's broken/partial CUDA stack
+  *simultaneously* races, regardless of what device XGBoost is told to use.
+  A single process never hit it — confirmed by testing `n_jobs=1` (serial)
+  at the same real scale before landing on the actual fix: XGBoost's own
+  search now runs with `RandomizedSearchCV(n_jobs=1)` (serial across CV
+  trials) but `XGBClassifier(n_jobs=-1)` (multi-threaded *within* that one
+  process) — sidesteps the multi-process race entirely, verified safe and
+  fast enough (~115s for 25 fits) at full scale. Every other family is
+  unaffected (no CUDA calls at all) and keeps process-parallel search. If a
+  future phase adds another GPU-capable library, treat "many processes
+  touching a shaky GPU driver at once" as a real risk category, not just
+  "set device=cpu and move on."
+- **Real environment gap, not a code bug: a fresh Postgres volume doesn't
+  carry over a manually-created database.** After the Docker Desktop
+  reinstall this session (see "Environment specifics" below), the new
+  `creditguard_postgres` container came up with a *fresh* named volume.
+  `docker-compose.yml`'s `POSTGRES_DB` env var only auto-creates the `creditguard`
+  app database on first boot — `creditguard_test` (which `tests/conftest.py`
+  needs) had been created by hand in some earlier session against the *old*
+  volume and was simply gone. Symptom: every DB-touching test failed with
+  `sqlalchemy.exc.OperationalError`, including ones that don't touch the DB
+  directly, because `_database`'s autouse fixture is session-scoped. Fixed
+  with `CREATE DATABASE creditguard_test OWNER creditguard;` via
+  `docker exec creditguard_postgres psql ...`, then
+  `python -m creditguard.db.init_db` to apply the schema to the *app* `creditguard`
+  DB too (needed for `--register-best`, separate from the test DB). Worth
+  checking first, before assuming a code regression, any time Postgres
+  itself was recently reinstalled/recreated rather than just restarted.
+- **Imbalance comparison result was honestly reported even though it
+  contradicts the usual textbook framing** (`reports/models/
+  imbalance_comparison.md`, `reports/models/model_card.md`): on this
+  dataset's moderate 11.10% imbalance, `class_weight` and resampling gave
+  logistic regression only a 0.5-0.9 point recall gain over doing nothing,
+  while clearly worsening raw Brier score (0.068 → 0.139) — the "resampling
+  trades calibration for recall" story is real but its *effect size* here
+  is much smaller on the recall side than the calibration side. This is
+  exactly why `calibration.py` is a mandatory separate stage applied to
+  whatever the winning strategy was, not an optional step: the final
+  registered model's calibration slope (0.9997) is excellent only because
+  it was explicitly recalibrated post-training, not because `class_weight`
+  (the strategy actually used for the registered model) happened to
+  preserve calibration on its own — it didn't.
+- **The HOME-loan effect from `reports/eda/findings.md` finding 4 shows up
+  directly in per-segment test metrics**: PR-AUC 0.737 and recall 0.969 for
+  HOME loans vs. 0.27-0.46 PR-AUC elsewhere. The model is visibly exploiting
+  whatever mechanism drives HOME loans' 32% default rate — flagged in
+  `model_card.md` as the top open item before Phase 7/8 treat HOME-loan
+  predictions as trustworthy, not treated as a good-news metric on its own.
+- **Fairness check went one step further than "IV is near zero":** Phase 5
+  found `gender`/`marital_status` have near-zero standalone IV, but they're
+  still present in the 77-feature training matrix (never excluded). This
+  phase checked the actual fitted elastic-net coefficients directly rather
+  than assuming the IV finding still held post-training —
+  every `gender_*`/`marital_status_*` coefficient came back effectively
+  zero (0.000-0.010, vs. a max feature coefficient of 0.83) — a
+  confirmatory result worth having actually checked, not just assumed.
 
 ## How this project likes to be verified
 

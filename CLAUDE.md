@@ -180,7 +180,7 @@ creditguard/
 - [x] **Phase 3** — Data validation and cleaning pipeline
 - [x] **Phase 4** — Feature engineering and leakage prevention
 - [x] **Phase 5** — Exploratory data analysis
-- [ ] **Phase 6** — Model training, imbalance handling and evaluation
+- [x] **Phase 6** — Model training, imbalance handling and evaluation
 - [ ] **Phase 7** — Credit scoring engine, risk categories and explainability
 - [ ] **Phase 8** — FastAPI real-time scoring service
 - [ ] **Phase 9** — Streamlit dashboard
