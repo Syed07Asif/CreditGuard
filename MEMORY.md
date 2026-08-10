@@ -87,9 +87,25 @@ checklist).
   200 even with a failed model load, `/health/ready` correctly 503s without
   volumes mounted). **Committed** (`<pending>` -- check `git log`, this
   note was written before any commit was requested for this phase).
-- **Next up:** Phase 9 (Streamlit dashboard), per `CLAUDE.md`'s checklist.
-  Phases are strictly sequential — don't start Phase 9 work, and don't add
-  stub files for it, until the user actually asks.
+- **Phase 9** (Streamlit dashboard) — done, 335 tests total (30 new),
+  ruff/black clean. `src/creditguard/dashboard/` (app/api_client/state +
+  components/{forms,cards,charts,tables} + pages/1-4) + `.streamlit/
+  config.toml` + `docker/Dockerfile.dashboard`. Required a small, additive
+  extension to the already-committed Phase 8 API first (new `predictions`
+  columns, a new `/model/performance` endpoint, `FactorDetail.
+  benchmark_median`) -- see "Dashboard design (Phase 9)" below for why and
+  exactly what changed. Verified live in a browser against the real
+  registered model and real accumulated prediction traffic (108
+  predictions), not just the automated suite: all four pages render, the
+  high-risk sample scores 300/VERY_HIGH/REJECT end-to-end through the
+  live API, Portfolio Analytics renders real KPIs/segments/charts with
+  filters present, Model Performance shows the real backfilled metrics
+  matching `reports/models/model_card.md` exactly. **Committed
+  (`<pending>` -- check `git log`)**.
+- **Next up:** Phase 10 (Monitoring, drift, retraining, Docker and CI), per
+  `CLAUDE.md`'s checklist. Phases are strictly sequential — don't start
+  Phase 10 work, and don't add stub files for it, until the user actually
+  asks.
 
 This is an educational/portfolio simulation (synthetic data only, not a real
 lending system), built one phase at a time with the user reviewing each phase's
@@ -601,6 +617,116 @@ from the engine unmodified.
   git-ignored generated output, per CLAUDE.md hard rule 1) -- real
   deployment must volume-mount them, documented in the Dockerfile's own
   comments and in `docs/api.md`.
+
+## Dashboard design (Phase 9)
+
+`src/creditguard/dashboard/` is a pure HTTP client of the Phase 8 API
+(`api_client.py`) -- pages compose `components/{forms,cards,charts,tables}`
+and call the client; no scoring/banding/decisioning logic lives in a page.
+
+- **A real gap between the brief and Phase 8's actual API surface, found
+  before writing any dashboard code, required extending the already-
+  committed Phase 8 API rather than working around it in the dashboard --
+  the user explicitly chose this over the alternatives (an N+1 `/applications`
+  join that would mislabel most demo traffic as "Unknown", or silently
+  dropping the requested segment breakdowns).** Two extensions, both
+  additive/backward-compatible, both covered by the existing Phase 8 test
+  suite rerun (305 tests, all still passing) plus new coverage:
+  1. **`predictions` gained four nullable columns** (`loan_type`, `age`,
+     `annual_income`, `employment_type`) -- Portfolio Analytics' segment
+     breakdowns (FR-018/019/020: by loan type/income band/age band/
+     employment type) need this data, but the `predictions` table never
+     stored it and most scoring traffic goes through the anonymous
+     `/predict` endpoint (no `customers`/`loan_applications` row to join
+     to at all). `db/schema.sql` uses `ALTER TABLE ... ADD COLUMN IF NOT
+     EXISTS` alongside the `CREATE TABLE IF NOT EXISTS` definition so the
+     migration is idempotent against an already-existing table, not just a
+     fresh one -- applied directly to both the dev and test databases via
+     `python -m creditguard.db.init_db` (no data loss; existing rows just
+     get `NULL` in the new columns). `scoring.engine.ScoringResult`/
+     `_persist_prediction` echo these straight from the already-validated
+     request; `GET /predictions` gained a matching `loan_type` filter.
+  2. **New `GET /api/v1/model/performance` endpoint** for ROC/PR/
+     confusion-matrix/calibration/lift-gains/feature-importance data Page
+     3 needs -- none of it was persisted anywhere structured (`model_registry.
+     metrics` only ever held scalars). Deliberately **not** computed live
+     per request (that would make a "thin transport layer" endpoint refit
+     a pipeline over the ~14.5k-row test split on every dashboard page
+     view) -- instead a new one-off module, `src/creditguard/models/
+     performance.py` (`python -m creditguard.models.performance`), rebuilds
+     the model's own test split via the existing `models.train.
+     load_training_data` and writes the results into `model_registry.
+     metrics.performance` via a new `registry.update_metrics` (merges into
+     the JSONB, touches no other column -- enriching a registered model's
+     metadata after the fact isn't "overwriting a trained model," CLAUDE.md
+     hard rule 6 is about the artifact). Run once against the real active
+     model as part of this phase. `ModelVersionSummary` also gained a
+     `metrics` field so the version-comparison table needs no extra calls.
+  3. **`FactorDetail` gained `benchmark_median`**, populated only on
+     `/explain` (not `/predict`'s top-k factor lists, which don't carry
+     benchmark context) -- Page 1's "ratios vs. portfolio median" panel
+     needs the training-portfolio median `creditguard.explain.
+     shap_explainer.load_portfolio_benchmarks` already computes per
+     feature, previously only baked into the reason-code sentence text.
+  All three are documented in `docs/api.md` alongside the original Phase 8
+  contract, not as a separate doc.
+- **"Default rate" on Portfolio Analytics always means the *predicted*
+  rate** (share of applications at/above the active model's own
+  `chosen_threshold`), never an observed 12-month outcome -- a live
+  scoring predictions log has no ground truth yet, and the API has no
+  endpoint exposing `loan_outcomes` to the dashboard. Labelled explicitly
+  as "Predicted default rate" everywhere it appears (KPI tile, segment
+  charts, time-series) rather than implying it's a real default rate.
+  Age/income bands used for segment charts (`state.age_band`/`income_band`)
+  are fixed, human-readable display cutoffs chosen for this synthetic
+  population -- not the model's own learned quantile `age_band`/
+  `income_band` features (`features.behavioural`), which the dashboard has
+  no access to and doesn't need to reproduce.
+- **The installed Streamlit version (1.61.1) no longer auto-wires the
+  classic `pages/` directory into multipage navigation -- found live in
+  the browser, not from docs.** All four pages rendered correctly in
+  isolation (confirmed by `streamlit.testing.v1.AppTest` smoke tests
+  passing), but the sidebar showed zero navigation and zero custom
+  sidebar content in a real running app -- `streamlit.source_util.
+  get_pages`, the function the old auto-discovery relied on, no longer
+  exists in this version (confirmed directly via `python -c "from
+  streamlit.source_util import get_pages"` -> `ImportError`). Fixed by
+  rewriting `app.py` as an explicit router using the current `st.
+  navigation()`/`st.Page()` API (`st.Page("pages/1_Applicant_Scoring.py",
+  ...)` etc., landing content moved into a local `_home()` callable passed
+  directly to `st.Page`) -- the four page files keep their brief-mandated
+  names/paths under `pages/`, and lost only their now-redundant individual
+  `st.set_page_config`/`render_sidebar_status()` calls, which the router
+  now owns centrally (also means the sidebar API-status check runs exactly
+  once per navigation instead of once per page).
+- **`st.cache_data`'s cache is process-global, not per-test** -- a test
+  asserting "API unreachable shows a friendly error" passed in isolation
+  but failed when run after a test that had already cached a *successful*
+  `cached_model_info()` result, since the cache silently served the stale
+  success instead of hitting the (now unmocked) endpoint. Fixed with an
+  autouse `st.cache_data.clear()` fixture in `tests/
+  test_dashboard_components.py`. Same TTL-cache mechanism is why the
+  dashboard's own read endpoints (`READ_CACHE_TTL_SECONDS = 30`) don't
+  hammer the API on every page rerun -- `/predict`/`/explain`/
+  `/applications` are never wrapped in it.
+- **Verified live against the real registered model and real accumulated
+  prediction traffic, not just the automated suite** (108 predictions
+  logged by this point): Applicant Scoring's high-risk sample scored
+  300/VERY_HIGH/REJECT end-to-end through the live API with the SHAP
+  chart and reason codes rendering; Portfolio Analytics rendered real
+  KPIs/segment charts/a 108-row searchable table with filters present;
+  Model Performance showed the real backfilled metrics matching
+  `reports/models/model_card.md` exactly (ROC-AUC 0.8770, PR-AUC 0.5450,
+  etc.) plus all six curve/importance charts and a version-comparison
+  table. One incidental finding while doing this: a `uvicorn --reload`
+  process not started by this session was found already listening on
+  port 8000 (a leftover from independent manual use, matching the
+  environment notes in the other memory file about running the API by
+  hand) -- it was stopped once by mistake while testing the "API down"
+  friendly-error path and immediately restarted with the same flags; the
+  automated test (`test_portfolio_analytics_shows_friendly_error_when_api_
+  unreachable`) covers that scenario without needing to repeat the live
+  disruption.
 
 ## How this project likes to be verified
 

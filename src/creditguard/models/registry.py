@@ -99,6 +99,23 @@ def register_model(
         return _row_to_dict(row)
 
 
+def update_metrics(model_id: str, metrics_patch: dict[str, Any]) -> dict[str, Any]:
+    """Merge `metrics_patch` into an existing row's `metrics` JSONB and
+    persist it -- every other column (including the model artifact itself)
+    is untouched. Used by `creditguard.models.performance`'s one-off
+    backfill of curve/table data Phase 9's dashboard needs; enriching a
+    registered model's metadata after the fact is not "overwriting a
+    trained model" (CLAUDE.md hard rule 6 is about the artifact, not this).
+    """
+    with get_session() as session:
+        row = session.execute(
+            select(ModelRegistry).where(ModelRegistry.model_id == model_id)
+        ).scalar_one()
+        row.metrics = {**row.metrics, **metrics_patch}
+        session.flush()
+        return _row_to_dict(row)
+
+
 def get_active_model() -> dict[str, Any] | None:
     """The currently active `model_registry` row, or `None` if none is
     active. Used by Phases 7-9 to find which model to load/serve.

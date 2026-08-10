@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends
 from creditguard.api.dependencies import enforce_rate_limit
 from creditguard.api.schemas import (
     ModelInfoResponse,
+    ModelPerformanceResponse,
     ModelVersionsResponse,
     ModelVersionSummary,
 )
@@ -21,6 +22,14 @@ from creditguard.models import registry
 from creditguard.scoring.engine import ScoringEngineError
 
 router = APIRouter(tags=["model"], dependencies=[Depends(enforce_rate_limit)])
+
+
+def _scalar_metrics(raw_metrics: dict) -> dict[str, float]:
+    return {
+        key: float(value)
+        for key, value in raw_metrics.items()
+        if isinstance(value, (int, float))
+    }
 
 
 @router.get("/model/info", response_model=ModelInfoResponse)
@@ -34,11 +43,7 @@ def model_info() -> ModelInfoResponse:
             "No active model registered -- run `python -m creditguard.models.train "
             "--register-best` first."
         )
-    metrics = {
-        key: float(value)
-        for key, value in model_row["metrics"].items()
-        if isinstance(value, (int, float))
-    }
+    metrics = _scalar_metrics(model_row["metrics"])
     return ModelInfoResponse(
         model_id=model_row["model_id"],
         model_version=model_row["model_version"],
@@ -63,8 +68,37 @@ def model_versions() -> ModelVersionsResponse:
             algorithm=row["algorithm"],
             training_date=row["training_date"],
             is_active=bool(row["is_active"]),
+            metrics=_scalar_metrics(row["metrics"]),
         )
         for row in rows
     ]
     versions.sort(key=lambda version: version.training_date, reverse=True)
     return ModelVersionsResponse(versions=versions)
+
+
+@router.get("/model/performance", response_model=ModelPerformanceResponse)
+def model_performance() -> ModelPerformanceResponse:
+    """ROC/PR/confusion/calibration/lift-gains/feature-importance data for
+    the active model -- read back from `model_registry.metrics.performance`,
+    backfilled once by `python -m creditguard.models.performance` (see that
+    module's docstring). Never recomputed on request: that would make this
+    "thin transport layer" endpoint refit a pipeline over the full test
+    split on every dashboard page view.
+    """
+    model_row = registry.get_active_model()
+    if model_row is None:
+        raise ScoringEngineError(
+            "No active model registered -- run `python -m creditguard.models.train "
+            "--register-best` first."
+        )
+    performance = model_row["metrics"].get("performance")
+    if performance is None:
+        raise ScoringEngineError(
+            "Performance artifacts not yet computed for the active model -- run "
+            "`python -m creditguard.models.performance` first."
+        )
+    return ModelPerformanceResponse(
+        model_id=model_row["model_id"],
+        model_version=model_row["model_version"],
+        **performance,
+    )

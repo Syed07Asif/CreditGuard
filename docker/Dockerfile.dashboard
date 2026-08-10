@@ -1,0 +1,67 @@
+# CreditGuard Phase 9: Streamlit dashboard.
+#
+# A pure HTTP client of the Phase 8 API (see
+# src/creditguard/dashboard/api_client.py) -- this image never mounts
+# `data/`/`models/artifacts/` and never talks to Postgres directly, unlike
+# docker/Dockerfile.api. `pip install .` still pulls the full pyproject.toml
+# dependency set (sqlalchemy/xgboost/shap/mlflow included) since the project
+# has one single-package pyproject.toml, not per-service extras -- matching
+# Dockerfile.api's own tradeoff rather than introducing a new one here.
+#
+# Build:  docker build -f docker/Dockerfile.dashboard -t creditguard-dashboard .
+# Run:    docker run -p 8501:8501 \
+#           -e API_BASE_URL=http://creditguard-api:8000 -e API_KEY=... \
+#           creditguard-dashboard
+
+# ---- builder ----------------------------------------------------------
+FROM python:3.11-slim AS builder
+
+WORKDIR /build
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:${PATH}"
+
+COPY pyproject.toml README.md ./
+COPY src ./src
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir .
+
+# ---- runtime -----------------------------------------------------------
+FROM python:3.11-slim AS runtime
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --system creditguard \
+    && useradd --system --gid creditguard --create-home --home-dir /app creditguard
+
+WORKDIR /app
+COPY --from=builder /opt/venv /opt/venv
+COPY .streamlit ./.streamlit
+# `streamlit run` needs a file path (there's no module-invocation form the
+# way `uvicorn module:app` has) -- the page script itself just imports
+# `creditguard.dashboard.*` from the installed venv package above, so which
+# copy of app.py is executed doesn't matter; this one is copied only to
+# give `streamlit run` something to point at.
+COPY src/creditguard/dashboard ./src/creditguard/dashboard
+
+RUN chown -R creditguard:creditguard /app
+
+ENV PATH="/opt/venv/bin:${PATH}" \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    API_BASE_URL="http://localhost:8000"
+
+USER creditguard
+
+EXPOSE 8501
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+    CMD curl -f http://localhost:8501/_stcore/health || exit 1
+
+CMD streamlit run src/creditguard/dashboard/app.py \
+    --server.port=8501 --server.address=0.0.0.0

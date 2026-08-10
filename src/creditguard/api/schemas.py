@@ -219,6 +219,11 @@ class FactorDetail(BaseModel):
     value: Any
     impact: float
     description: str
+    # Phase 9 addition, `/explain` only: the training-portfolio median for
+    # this feature, so the dashboard can show "applicant vs. portfolio
+    # median" without recomputing it (it's never fed by /predict's factor
+    # lists, which don't carry benchmark context -- see docs/api.md).
+    benchmark_median: float | None = None
 
 
 class PredictionResponse(BaseModel):
@@ -281,6 +286,13 @@ class PredictionListItem(BaseModel):
     recommendation: str
     latency_ms: int
     request_source: str
+    # Phase 9 addition: NULL for predictions logged before these columns
+    # existed on `predictions` (see db/schema.sql). Lets the dashboard
+    # segment real prediction traffic without joining to other tables.
+    loan_type: str | None = None
+    age: int | None = None
+    annual_income: float | None = None
+    employment_type: str | None = None
     created_at: datetime
 
 
@@ -309,10 +321,52 @@ class ModelVersionSummary(BaseModel):
     algorithm: str
     training_date: datetime
     is_active: bool
+    metrics: dict[str, float] = Field(default_factory=dict)
 
 
 class ModelVersionsResponse(BaseModel):
     versions: list[ModelVersionSummary]
+
+
+class ConfusionMatrix(BaseModel):
+    tn: int
+    fp: int
+    fn: int
+    tp: int
+
+
+class LiftGainsRow(BaseModel):
+    decile: int
+    n: int
+    n_positive: int
+    default_rate: float
+    cum_n: int
+    cum_positive: int
+    cum_gain: float
+    lift: float
+    cum_lift: float
+
+
+class FeatureImportanceItem(BaseModel):
+    feature: str
+    importance: float
+
+
+class ModelPerformanceResponse(BaseModel):
+    """ROC/PR/confusion/calibration/lift-gains/feature-importance data for
+    one model, computed once by `creditguard.models.performance`'s backfill
+    (see that module's docstring) and persisted onto the model's own
+    `model_registry.metrics` row -- this endpoint only reads it back.
+    """
+
+    model_id: str
+    model_version: str
+    roc_curve: dict[str, list[float]]
+    pr_curve: dict[str, list[float]]
+    confusion_matrix: ConfusionMatrix
+    calibration_curve: dict[str, list[float]]
+    lift_gains: list[LiftGainsRow]
+    feature_importance: list[FeatureImportanceItem]
 
 
 class HealthResponse(BaseModel):

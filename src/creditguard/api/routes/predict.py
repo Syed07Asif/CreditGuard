@@ -141,6 +141,7 @@ def explain(payload: PredictionRequest, request: Request) -> ExplainResponse:
                 contribution,
                 detailed.benchmarks.get(feature, {}),
             ),
+            benchmark_median=detailed.benchmarks.get(feature, {}).get("median"),
         )
         for feature, contribution in ranked
     ]
@@ -170,6 +171,7 @@ def list_predictions(
     risk_category: Annotated[str | None, Query()] = None,
     recommendation: Annotated[str | None, Query()] = None,
     model_id: Annotated[str | None, Query()] = None,
+    loan_type: Annotated[str | None, Query()] = None,
 ) -> PredictionListResponse:
     """Paginated, filterable prediction log, newest first."""
     rows, total = PredictionRepository().query_predictions(
@@ -178,6 +180,7 @@ def list_predictions(
         risk_category=risk_category,
         recommendation=recommendation,
         model_id=model_id,
+        loan_type=loan_type,
         page=page,
         page_size=page_size,
     )
@@ -193,6 +196,14 @@ def list_predictions(
             recommendation=row["recommendation"],
             latency_ms=row["latency_ms"],
             request_source=row["request_source"],
+            loan_type=row.get("loan_type"),
+            age=row.get("age"),
+            annual_income=(
+                float(row["annual_income"])
+                if row.get("annual_income") is not None
+                else None
+            ),
+            employment_type=row.get("employment_type"),
             created_at=row["created_at"],
         )
         for row in rows

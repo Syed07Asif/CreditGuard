@@ -123,13 +123,32 @@ CREATE TABLE IF NOT EXISTS predictions (
     top_positive_factors   JSONB NOT NULL,
     latency_ms             INT NOT NULL,
     request_source         TEXT NOT NULL,
+    -- Nullable: added in Phase 9 so the dashboard's Portfolio Analytics page
+    -- can segment real prediction traffic by loan type / age / income /
+    -- employment type without joining to customers/loan_applications (which
+    -- most predictions -- anonymous /predict calls -- have no row in at
+    -- all). NULL for any prediction logged before this column existed.
+    loan_type              TEXT,
+    age                    INT,
+    annual_income          NUMERIC,
+    employment_type        TEXT,
     created_at             TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Idempotent patch for a predictions table created before the Phase 9
+-- columns above existed (CREATE TABLE IF NOT EXISTS above is a no-op on an
+-- already-existing table, so these are needed to bring it up to date too).
+ALTER TABLE predictions ADD COLUMN IF NOT EXISTS loan_type TEXT;
+ALTER TABLE predictions ADD COLUMN IF NOT EXISTS age INT;
+ALTER TABLE predictions ADD COLUMN IF NOT EXISTS annual_income NUMERIC;
+ALTER TABLE predictions ADD COLUMN IF NOT EXISTS employment_type TEXT;
 
 CREATE INDEX IF NOT EXISTS ix_predictions_model_id
     ON predictions (model_id);
 CREATE INDEX IF NOT EXISTS ix_predictions_created_at
     ON predictions (created_at);
+CREATE INDEX IF NOT EXISTS ix_predictions_loan_type
+    ON predictions (loan_type);
 
 CREATE TABLE IF NOT EXISTS data_quality_issues (
     issue_id      SERIAL PRIMARY KEY,

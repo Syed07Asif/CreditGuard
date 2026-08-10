@@ -1,0 +1,18 @@
+# Phase 9 dashboard theme -- colours align with creditguard.eda.plots'
+# Okabe-Ito palette (creditguard.dashboard.state.OKABE_ITO) for a consistent
+# look across the EDA figures and the live dashboard.
+
+[theme]
+base = "light"
+primaryColor = "#0072B2"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F0F2F6"
+textColor = "#262730"
+font = "sans serif"
+
+[server]
+headless = true
+enableXsrfProtection = true
+
+[browser]
+gatherUsageStats = false

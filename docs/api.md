@@ -54,7 +54,8 @@ Configured via `CORS_ORIGINS` (comma-separated), default
 | GET | `/api/v1/applications/{loan_id}` | yes | Retrieve a stored application + its latest prediction |
 | GET | `/api/v1/predictions` | yes | Paginated, filterable prediction log |
 | GET | `/api/v1/model/info` | yes | Active model's id, version, metrics, threshold |
-| GET | `/api/v1/model/versions` | yes | Every registered model version |
+| GET | `/api/v1/model/versions` | yes | Every registered model version, with its scalar metrics |
+| GET | `/api/v1/model/performance` | yes | ROC/PR/confusion/calibration/lift-gains/feature-importance for the active model (Phase 9) |
 | GET | `/health` | no | Liveness |
 | GET | `/health/ready` | no | Readiness: database reachable AND model loaded |
 | GET | `/metrics` | yes | Request count, error count, p50/p95/p99 latency |
@@ -121,6 +122,33 @@ their logical source feature and rendered as a human-readable sentence
 (`creditguard.explain.reason_codes`). `/explain` returns the same
 prediction fields plus **every** logical feature's contribution
 (`feature_contributions`, typically 53 entries), not just the top 5.
+`/explain`'s `feature_contributions[*].benchmark_median` (Phase 9 addition)
+is the training-portfolio median for that feature -- `null` on `/predict`'s
+`top_risk_factors`/`top_positive_factors`, which don't carry benchmark
+context.
+
+### `GET /api/v1/predictions` segment fields (Phase 9 addition)
+
+`PredictionListItem` also carries `loan_type`, `age`, `annual_income` and
+`employment_type` -- echoed from the scored request and persisted onto the
+`predictions` row itself (not joined from `customers`/`loan_applications`,
+which most predictions -- anonymous `/predict` calls -- have no row in at
+all). `NULL` for any prediction logged before this column existed. `GET
+/predictions` also accepts a `loan_type` query filter alongside the
+existing ones. Added so Phase 9's dashboard can build real segment
+breakdowns without the dashboard touching the database directly.
+
+### `GET /api/v1/model/performance` (Phase 9 addition)
+
+Curve/table data `ModelInfoResponse`'s scalar `metrics` doesn't carry: ROC
+curve points, PR curve points, a confusion matrix at the model's own
+`chosen_threshold`, a calibration/reliability curve, a lift/gains table by
+decile, and global feature importance. Computed **once, offline**, by
+`python -m creditguard.models.performance` (see that module's docstring)
+and persisted onto `model_registry.metrics.performance` -- this endpoint
+only reads it back, never recomputes it, so it stays a thin transport
+layer even though the underlying computation needs the full test split.
+`503` if that backfill hasn't been run yet for the active model.
 
 ### `GET /api/v1/applications/{loan_id}`'s `latest_prediction` limitation
 

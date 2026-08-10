@@ -202,6 +202,12 @@ class Prediction(Base):
     top_positive_factors: Mapped[Any] = mapped_column(JSONB)
     latency_ms: Mapped[int] = mapped_column(Integer)
     request_source: Mapped[str] = mapped_column(Text)
+    # Nullable: NULL for predictions logged before Phase 9 added these
+    # columns for dashboard segment analysis (see db/schema.sql).
+    loan_type: Mapped[str | None] = mapped_column(Text)
+    age: Mapped[int | None] = mapped_column(Integer)
+    annual_income: Mapped[float | None] = mapped_column(Numeric)
+    employment_type: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), server_default=text("now()")
     )

@@ -146,6 +146,7 @@ class PredictionRepository(BaseRepository[Prediction]):
         risk_category: str | None = None,
         recommendation: str | None = None,
         model_id: str | None = None,
+        loan_type: str | None = None,
         page: int = 1,
         page_size: int = 20,
     ) -> tuple[list[dict[str, Any]], int]:
@@ -165,6 +166,8 @@ class PredictionRepository(BaseRepository[Prediction]):
             conditions.append(Prediction.recommendation == recommendation)
         if model_id is not None:
             conditions.append(Prediction.model_id == model_id)
+        if loan_type is not None:
+            conditions.append(Prediction.loan_type == loan_type)
 
         with get_session() as session:
             count_stmt = select(func.count()).select_from(Prediction)

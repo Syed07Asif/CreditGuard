@@ -185,6 +185,13 @@ class ScoringResult:
     top_positive_factors: list[dict[str, Any]]
     latency_ms: int
     scored_at: datetime
+    # Echoed from the request (not derived by scoring) so Phase 9's
+    # dashboard can segment logged predictions by them -- see
+    # db/schema.sql's Phase 9 note on the `predictions` table.
+    loan_type: str
+    age: int
+    annual_income: float
+    employment_type: str
 
 
 @dataclass
@@ -368,6 +375,10 @@ def _persist_prediction(result: ScoringResult, request_source: str) -> None:
                 "top_positive_factors": result.top_positive_factors,
                 "latency_ms": result.latency_ms,
                 "request_source": request_source,
+                "loan_type": result.loan_type,
+                "age": result.age,
+                "annual_income": result.annual_income,
+                "employment_type": result.employment_type,
             }
         ]
     )
@@ -445,6 +456,10 @@ def _score_and_explain(
         top_positive_factors=positive_factors,
         latency_ms=latency_ms,
         scored_at=datetime.now(UTC),
+        loan_type=validated.loan_type,
+        age=validated.age,
+        annual_income=validated.annual_income,
+        employment_type=validated.employment_type,
     )
     return result, explanation, raw_features
 

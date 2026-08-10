@@ -183,7 +183,7 @@ creditguard/
 - [x] **Phase 6** — Model training, imbalance handling and evaluation
 - [x] **Phase 7** — Credit scoring engine, risk categories and explainability
 - [x] **Phase 8** — FastAPI real-time scoring service
-- [ ] **Phase 9** — Streamlit dashboard
+- [x] **Phase 9** — Streamlit dashboard
 - [ ] **Phase 10** — Monitoring, drift, retraining, Docker and CI
 
 Phases are delivered one at a time and in order. Do not start a later phase until the
