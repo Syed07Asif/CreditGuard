@@ -93,19 +93,13 @@ def render_applicant_form() -> dict[str, Any] | None:
                 value=float(current["employment_years"]),
                 step=0.5,
             )
-            c3, c4 = st.columns(2)
-            monthly_income = c3.number_input(
+            monthly_income = st.number_input(
                 "Monthly income",
                 min_value=1.0,
                 value=float(current["monthly_income"]),
                 step=1000.0,
-            )
-            annual_income = c4.number_input(
-                "Annual income",
-                min_value=1.0,
-                value=float(current["annual_income"]),
-                step=10000.0,
-                help="Must be within 5% of 12 x monthly income.",
+                help="Annual income is derived as 12x this automatically "
+                "(the API requires the two to be consistent).",
             )
 
         with st.expander("Financial Position", expanded=True):
@@ -252,7 +246,7 @@ def render_applicant_form() -> dict[str, Any] | None:
         "employment_type": employment_type,
         "dependents": int(dependents),
         "employment_years": float(employment_years),
-        "annual_income": float(annual_income),
+        "annual_income": float(monthly_income) * 12,
         "monthly_income": float(monthly_income),
         "city_tier": int(city_tier),
         "monthly_expenses": float(monthly_expenses),
