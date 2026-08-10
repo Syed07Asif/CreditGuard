@@ -411,3 +411,37 @@ def test_reload_active_model_clears_the_cache() -> None:
     engine._MODEL_CACHE = object()  # type: ignore[assignment]
     engine.reload_active_model()
     assert engine._MODEL_CACHE is None
+
+
+def test_is_model_loaded_reflects_cache_state() -> None:
+    engine._MODEL_CACHE = None
+    assert engine.is_model_loaded() is False
+    engine._MODEL_CACHE = object()  # type: ignore[assignment]
+    assert engine.is_model_loaded() is True
+    engine.reload_active_model()
+
+
+def test_explain_application_returns_full_per_feature_breakdown(loaded_model) -> None:
+    detailed = engine.explain_application(_sample_raw_input())
+    assert isinstance(detailed, engine.DetailedExplanation)
+    assert detailed.result.model_id == loaded_model.model_id
+    assert isinstance(detailed.shap_base_value, float)
+    # Every logical feature (numeric + categorical + ordinal) should be
+    # represented, not just the top-k ScoringResult carries.
+    n_expected = (
+        len(loaded_model.numeric_columns)
+        + len(loaded_model.categorical_columns)
+        + len(loaded_model.ordinal_columns)
+    )
+    assert len(detailed.contributions_by_feature) == n_expected
+    assert set(detailed.raw_features) >= set(loaded_model.numeric_columns)
+    assert detailed.benchmarks == loaded_model.benchmarks
+
+
+def test_explain_application_does_not_persist(loaded_model) -> None:
+    payload = _sample_raw_input(loan_id="LOAN-EXPLAIN-NO-PERSIST")
+    engine.explain_application(payload)
+    rows = PredictionRepository().fetch_dataframe(
+        filters={"loan_id": "LOAN-EXPLAIN-NO-PERSIST"}
+    )
+    assert len(rows) == 0

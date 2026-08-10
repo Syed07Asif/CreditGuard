@@ -517,10 +517,12 @@ def generate_reason_codes(
     benchmarks: Mapping[str, Mapping[str, Any]],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Build the reason-code lists for a `ScoringResult`: `(risk_factors,
-    positive_factors)`, each a list of `{"feature", "contribution",
+    positive_factors)`, each a list of `{"feature", "value", "contribution",
     "reason"}` dicts, ordered as given (callers pass
     `ShapExplanation.top_positive_factors`/`top_negative_factors`, already
-    ranked by absolute contribution).
+    ranked by absolute contribution). `"value"` is the applicant's raw
+    value for that feature, included alongside the rendered sentence so a
+    caller (e.g. Phase 8's API response) doesn't need to re-derive it.
     """
 
     def _build(factors: list[tuple[str, float]]) -> list[dict[str, Any]]:
@@ -530,7 +532,12 @@ def generate_reason_codes(
             benchmark = benchmarks.get(feature, {})
             reason = render_reason(feature, value, contribution, benchmark)
             rows.append(
-                {"feature": feature, "contribution": contribution, "reason": reason}
+                {
+                    "feature": feature,
+                    "value": value,
+                    "contribution": contribution,
+                    "reason": reason,
+                }
             )
         return rows
 

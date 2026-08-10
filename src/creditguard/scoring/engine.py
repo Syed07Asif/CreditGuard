@@ -334,6 +334,25 @@ def reload_active_model() -> None:
     shap_explainer.clear_explainer_cache()
 
 
+def is_model_loaded() -> bool:
+    """Whether the active model singleton is currently warm -- Phase 8's
+    `/health/ready` readiness check reads this rather than reaching into
+    `_MODEL_CACHE` directly.
+    """
+    return _MODEL_CACHE is not None
+
+
+def warm_up() -> None:
+    """Eagerly load the active model, its refit feature pipeline, scoring
+    config and SHAP explainer, so the first real request doesn't pay that
+    one-time cost. Call once at process startup (Phase 8's FastAPI
+    `lifespan`); raises whatever `_load_active_model` raises (e.g.
+    `ScoringEngineError` if no model is registered) so the caller can decide
+    how to handle a failed startup load.
+    """
+    _get_loaded_model()
+
+
 def _persist_prediction(result: ScoringResult, request_source: str) -> None:
     PredictionRepository().insert_many(
         [
@@ -354,21 +373,22 @@ def _persist_prediction(result: ScoringResult, request_source: str) -> None:
     )
 
 
-def score_application(
+def _score_and_explain(
     raw_input: dict[str, Any],
-    *,
-    persist: bool = True,
-    request_source: str = "scoring_engine",
-) -> ScoringResult:
-    """Score one loan application end to end: validate -> assemble the
-    point-in-time feature row -> feature pipeline transform -> the active
-    calibrated model's `predict_proba` -> credit score -> risk category ->
-    lending recommendation -> SHAP explanation -> (optionally) persist to
-    `predictions` -> return a `ScoringResult`.
+) -> tuple[ScoringResult, shap_explainer.ShapExplanation, dict[str, Any]]:
+    """Shared body of `score_application`/`explain_application`: validate ->
+    assemble the point-in-time feature row -> feature pipeline transform ->
+    the active calibrated model's `predict_proba` -> credit score -> risk
+    category -> lending recommendation -> SHAP explanation. Returns the
+    `ScoringResult`, the full `ShapExplanation` (every feature, not just the
+    top-k `ScoringResult` carries), and the human-readable raw feature row
+    (for callers building a fuller explanation than `ScoringResult` exposes,
+    e.g. Phase 8's `/explain` endpoint). Never persists -- callers decide
+    that.
 
-    `latency_ms` measures this call's own work (feature assembly through
-    persistence), not the one-time cost of loading the active model on the
-    very first call in a process -- `_get_loaded_model()` caches that.
+    `ScoringResult.latency_ms` measures this call's own work (feature
+    assembly onward), not the one-time cost of loading the active model on
+    the very first call in a process -- `_get_loaded_model()` caches that.
     """
     validated = _validate_input(raw_input)
     loaded = _get_loaded_model()
@@ -426,8 +446,53 @@ def score_application(
         latency_ms=latency_ms,
         scored_at=datetime.now(UTC),
     )
+    return result, explanation, raw_features
 
+
+def score_application(
+    raw_input: dict[str, Any],
+    *,
+    persist: bool = True,
+    request_source: str = "scoring_engine",
+) -> ScoringResult:
+    """Score one loan application end to end and (optionally) persist the
+    result to `predictions`. See `_score_and_explain` for the pipeline
+    itself; this wrapper just adds persistence.
+    """
+    result, _explanation, _raw_features = _score_and_explain(raw_input)
     if persist:
         _persist_prediction(result, request_source)
-
     return result
+
+
+@dataclass(frozen=True)
+class DetailedExplanation:
+    """Everything Phase 8's `/explain` endpoint needs beyond what
+    `ScoringResult` carries: a per-feature SHAP contribution for *every*
+    logical feature (not just the top-k risk/positive factors), plus the
+    raw applicant values and portfolio benchmarks needed to render a reason
+    code for any of them on demand.
+    """
+
+    result: ScoringResult
+    shap_base_value: float
+    contributions_by_feature: dict[str, float]
+    raw_features: dict[str, Any]
+    benchmarks: dict[str, dict[str, Any]]
+
+
+def explain_application(raw_input: dict[str, Any]) -> DetailedExplanation:
+    """Full per-feature SHAP breakdown for one application. Does not
+    persist a `predictions` row -- explaining isn't itself a scoring
+    decision event; callers that also want the decision logged should call
+    `score_application` separately (or persist `.result` themselves).
+    """
+    result, explanation, raw_features = _score_and_explain(raw_input)
+    loaded = _get_loaded_model()
+    return DetailedExplanation(
+        result=result,
+        shap_base_value=explanation.base_value,
+        contributions_by_feature=explanation.contributions_by_source_feature,
+        raw_features=raw_features,
+        benchmarks=loaded.benchmarks,
+    )

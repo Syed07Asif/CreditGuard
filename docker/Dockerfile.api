@@ -1,0 +1,77 @@
+# CreditGuard Phase 8: FastAPI scoring service.
+#
+# Multi-stage build: the `builder` stage compiles/installs the package into
+# a virtualenv (needs a C toolchain for any dependency without a prebuilt
+# wheel for this platform); the `runtime` stage copies only that
+# virtualenv plus the application's config files, so the final image never
+# carries a compiler or the wheel cache.
+#
+# `models/artifacts/` (the trained calibrated model, its refit feature
+# pipeline's dependencies, and the SHAP background/benchmark artifacts) and
+# `data/processed/<dataset_version>/` are generated output -- CLAUDE.md's
+# hard rule 1 forbids committing them, so they do not exist in a fresh
+# checkout and are never baked into this image. Mount both as volumes at
+# `docker run`/`docker compose` time (see docker-compose.yml), pointing at
+# wherever Phase 2/6 generated them.
+#
+# Build:  docker build -f docker/Dockerfile.api -t creditguard-api .
+# Run:    docker run -p 8000:8000 --env-file .env \
+#           -v $(pwd)/data:/app/data -v $(pwd)/models:/app/models \
+#           creditguard-api
+
+# ---- builder ----------------------------------------------------------
+FROM python:3.11-slim AS builder
+
+WORKDIR /build
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:${PATH}"
+
+COPY pyproject.toml README.md ./
+COPY src ./src
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir .
+
+# ---- runtime -----------------------------------------------------------
+FROM python:3.11-slim AS runtime
+
+# curl only, for the HEALTHCHECK below -- psycopg[binary] bundles its own
+# libpq, so no Postgres client library is needed at runtime.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --system creditguard \
+    && useradd --system --gid creditguard --create-home --home-dir /app creditguard
+
+WORKDIR /app
+COPY --from=builder /opt/venv /opt/venv
+COPY config ./config
+COPY db/schema.sql ./db/schema.sql
+
+RUN mkdir -p /app/data /app/models/artifacts /app/reports \
+    && chown -R creditguard:creditguard /app
+
+ENV PATH="/opt/venv/bin:${PATH}" \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    UVICORN_WORKERS=1
+
+USER creditguard
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# Shell form so ${UVICORN_WORKERS} expands -- lets `docker run -e
+# UVICORN_WORKERS=4` change worker count without rebuilding the image. Note
+# creditguard.scoring.engine's in-process model cache and
+# creditguard.api.dependencies'/middleware's in-memory rate limiter and
+# metrics store are each per worker *process*, not shared across workers --
+# fine for a single-process educational deployment, a real multi-worker
+# production deployment would need a shared store (e.g. Redis) instead.
+CMD uvicorn creditguard.api.main:app --host 0.0.0.0 --port 8000 --workers ${UVICORN_WORKERS}

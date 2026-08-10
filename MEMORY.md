@@ -72,12 +72,24 @@ checklist).
   deliberately extreme synthetic fixtures), both under 500ms per-request
   latency (79ms/31ms; the one-time model-load-and-pipeline-refit cost,
   ~10-25s, is deliberately excluded from `ScoringResult.latency_ms` --
-  see "Scoring & explainability design" below). **Not yet committed** as
-  of this note — check `git status`/`git log` before assuming otherwise.
-- **Next up:** Phase 8 (FastAPI real-time scoring service), per
-  `CLAUDE.md`'s checklist. Phases are strictly sequential — don't start
-  Phase 8 work, and don't add stub files for it, until the user actually
-  asks.
+  see "Scoring & explainability design" below). **Committed** (`9c6c820`,
+  "Phase 7: Credit scoring engine, risk categories and explainability").
+- **Phase 8** (FastAPI real-time scoring service) — done, 305 tests total
+  (44 new), ruff/black clean. `src/creditguard/api/` (main/schemas/
+  dependencies/middleware/errors/routes/{predict,applications,model,
+  health}) + `docker/Dockerfile.api` + `docs/api.md`. Every endpoint from
+  the brief implemented; verified end to end against the real registered
+  Phase 6/7 model (not just the synthetic fixture the automated tests use)
+  -- see "API design" below for the p95 latency number and the two real
+  gaps the brief's literal field list had (`city_tier`, `customer_id`/
+  `loan_id`) that were filled in rather than silently worked around.
+  Docker image built and smoke-tested directly (container starts, `/health`
+  200 even with a failed model load, `/health/ready` correctly 503s without
+  volumes mounted). **Committed** (`<pending>` -- check `git log`, this
+  note was written before any commit was requested for this phase).
+- **Next up:** Phase 9 (Streamlit dashboard), per `CLAUDE.md`'s checklist.
+  Phases are strictly sequential — don't start Phase 9 work, and don't add
+  stub files for it, until the user actually asks.
 
 This is an educational/portfolio simulation (synthetic data only, not a real
 lending system), built one phase at a time with the user reviewing each phase's
@@ -474,6 +486,121 @@ lending decision, and a plain-English explanation.
   internals -- ties broken by longest-prefix-match in case one categorical
   column name is itself a prefix of another's (none currently are, but
   tested anyway).
+
+## API design (Phase 8)
+
+`src/creditguard/api/` is a thin transport layer over `creditguard.
+scoring.engine` -- validation (`schemas.py`), auth/rate-limiting
+(`dependencies.py`), request-id/logging/metrics (`middleware.py`),
+exception-to-HTTP mapping (`errors.py`), and the routes themselves
+(`routes/`). No scoring logic lives here; every number in a response comes
+from the engine unmodified.
+
+- **The brief's `PredictionRequest` field list was missing two things the
+  engine actually needs, filled in rather than silently worked around:**
+  `city_tier` (one of the 43 numeric model features, required by
+  `engine.RawApplicationInput` with no default -- omitting it would have
+  meant either a fabricated default silently biasing every prediction, or
+  a confusing 422 the brief never asked for) was added as a real required
+  field, documented inline as an addition beyond the literal list.
+  `customer_id`/`loan_id` (required by the engine, but absent from the
+  brief's field list, and the response schema's explicit "`loan_id`
+  (nullable)" note only makes sense if the request doesn't require one)
+  were made optional on `PredictionRequest`, with the route layer
+  generating a synthetic `customer_id` when omitted for `/predict`/
+  `/explain` (stateless what-if scoring, no database row required) --
+  `POST /applications` overrides `customer_id` back to required, since
+  that endpoint actually persists a customer.
+- **`credit_utilization` is accepted and range-checked but never fed to
+  the engine.** It's a real `credit_history` table column `POST
+  /applications` needs to persist a bureau snapshot, but Phase 4's
+  `RatioFeatures` always recomputes credit utilisation from
+  `total_outstanding`/`total_credit_limit` (the single source of truth
+  established in `creditguard.features.leakage` -- see the Phase 4 section
+  above). `routes/predict.build_engine_input` explicitly drops it before
+  calling the engine, with a comment explaining why, rather than silently
+  ignoring it with no trace.
+- **`/explain` needed a richer object than `ScoringResult` (which only
+  carries the top-5 factors each direction) -- required a small,
+  deliberate refactor of `engine.score_application`,** not a workaround in
+  the API layer: its body was split into a private `_score_and_explain`
+  (validate -> assemble -> transform -> predict -> score -> categorise ->
+  recommend -> explain, returning the `ScoringResult`, the full
+  `ShapExplanation`, and the raw feature row) that both `score_application`
+  (adds persistence) and the new `explain_application` (returns a
+  `DetailedExplanation` with every feature's contribution, not just the
+  top-k) call. `score_application`'s existing behaviour, signature and
+  tests are unchanged by this -- confirmed by rerunning
+  `tests/test_engine.py` before writing anything Phase-8-specific.
+  `reason_codes.generate_reason_codes` also gained a `"value"` key in its
+  output rows (the applicant's raw value, needed for the API's
+  `{feature, value, impact, description}` contract) -- additive, doesn't
+  break the existing subset-based test assertions.
+- **`POST /applications` writes four tables in one transaction, not
+  `BaseRepository.insert_many`'s default one-transaction-per-call.**
+  `insert_many` (Phase 1) opens and commits its own session per call, so
+  calling it four times in a row for customer/loan/financial/credit rows
+  would leave a partial application on disk if, say, the fourth insert hit
+  a constraint violation -- a real correctness gap for a multi-table write,
+  not just a style preference. `applications._persist_application` uses
+  `creditguard.db.engine.get_session()` directly instead, all four
+  `session.execute(insert(...))` calls sharing one commit-on-success/
+  rollback-on-error transaction.
+- **`GET /applications/{loan_id}`'s reconstructed `latest_prediction`
+  always has `triggered_rules: []`, honestly, not silently wrong.** The
+  `predictions` table (fixed at Phase 1) has no column for the
+  recommendation's rule trace -- only the decision, probability, score and
+  the two SHAP factor lists. A prediction rebuilt from a stored row can't
+  reconstruct rules that were never persisted; only a fresh `/predict` call
+  carries them. `model_version` *is* resolvable from a stored row (looked
+  up from `model_registry` by the stored `model_id`, which is guaranteed
+  to still exist because model versions are never overwritten -- CLAUDE.md
+  hard rule 6) -- the two fields aren't handled the same way because one
+  is genuinely unrecoverable and the other isn't.
+- **`TestClient`'s default `raise_server_exceptions=True` silently
+  bypasses the app's own exception handlers -- caught by a real test
+  failure, not by reading the docs.** `tests/test_api_predict.py::
+  test_unexpected_error_never_leaks_exception_text` initially failed with
+  the raw `RuntimeError` propagating all the way out of the test process
+  instead of coming back as a 500 response, even though `creditguard.
+  api.errors.handle_unexpected_error` was correctly registered. Root
+  cause: TestClient's default behaviour re-raises any exception that
+  reaches `ServerErrorMiddleware` *in the test process itself*, specifically
+  to surface real tracebacks while developing route code -- it does not
+  reflect what a real client (or `uvicorn`) would see, where the same
+  exception is correctly converted to a safe JSON 500. Fixed by
+  constructing the shared `api_client` fixture (`tests/conftest.py`) with
+  `TestClient(app, raise_server_exceptions=False)`. Worth remembering for
+  Phase 9's dashboard tests too, if they ever hit the API's own error
+  paths through a TestClient rather than real HTTP.
+- **Measured p95 latency:** 207ms over 50 sequential `/predict` calls
+  against the synthetic test fixture model (`tests/test_api_predict.py::
+  test_single_prediction_p95_latency_under_2000ms`, printed, not just
+  asserted) -- comfortably inside the 2000ms NFR-001 budget. Against the
+  real registered Phase 6 model (manual verification, not part of the
+  automated suite): single-call latency in the 20-200ms range after the
+  one-time ~10-25s startup load, also well inside budget.
+- **`config.Settings` gained two Phase 8 fields** (`rate_limit_rpm` default
+  100, `cors_origins` default `http://localhost:8501` with a
+  `cors_origin_list` computed property splitting it for `CORSMiddleware`)
+  and **`db.repository.PredictionRepository` gained `query_predictions`**
+  (filtered + paginated, for `GET /predictions`) -- both small, additive
+  changes to earlier-phase modules, not new Phase 8-only files, because the
+  capability genuinely belongs there (config and repository are exactly
+  where a new setting/query method should live), not because of scope
+  creep.
+- **Docker image built and smoke-tested directly, not just written on
+  faith:** `docker build -f docker/Dockerfile.api` succeeds (multi-stage,
+  ~280s for the dependency install layer, final image non-root), and a
+  real `docker run` (no volumes mounted, matching a fresh-checkout
+  scenario) confirmed the intended liveness/readiness split empirically --
+  `/health` stayed `200` despite the expected-and-logged startup model-load
+  failure (no `data/`/`models/artifacts/` mounted), `/health/ready`
+  correctly reported `503` with `model_loaded: false`. `models/artifacts/`
+  and `data/processed/<version>/` are never baked into the image (both
+  git-ignored generated output, per CLAUDE.md hard rule 1) -- real
+  deployment must volume-mount them, documented in the Dockerfile's own
+  comments and in `docs/api.md`.
 
 ## How this project likes to be verified
 

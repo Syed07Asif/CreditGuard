@@ -39,6 +39,21 @@ class Settings(BaseSettings):
     reports_dir: Path = Field(default=Path("reports"), alias="REPORTS_DIR")
     data_dir: Path = Field(default=Path("data"), alias="DATA_DIR")
 
+    # Phase 8 (API)
+    rate_limit_rpm: int = Field(default=100, alias="RATE_LIMIT_RPM")
+    cors_origins: str = Field(default="http://localhost:8501", alias="CORS_ORIGINS")
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def cors_origin_list(self) -> list[str]:
+        """`cors_origins` (comma-separated) split into a list for
+        `CORSMiddleware` -- the Streamlit dashboard's origin(s), configured
+        rather than hard-coded so `.env` alone controls it per environment.
+        """
+        return [
+            origin.strip() for origin in self.cors_origins.split(",") if origin.strip()
+        ]
+
     @computed_field  # type: ignore[prop-decorator]
     @property
     def sqlalchemy_dsn(self) -> str:

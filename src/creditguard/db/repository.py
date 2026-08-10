@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Generic, TypeVar
 
 import pandas as pd
-from sqlalchemy import insert, select, text
+from sqlalchemy import func, insert, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from creditguard.db.engine import get_engine, get_session
@@ -136,6 +137,50 @@ class PredictionRepository(BaseRepository[Prediction]):
 
     model = Prediction
     pk_column = "prediction_id"
+
+    def query_predictions(
+        self,
+        *,
+        date_from: datetime | None = None,
+        date_to: datetime | None = None,
+        risk_category: str | None = None,
+        recommendation: str | None = None,
+        model_id: str | None = None,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Filtered, paginated predictions, newest first -- Phase 8's
+        `GET /api/v1/predictions`. `page` is 1-indexed. Returns
+        `(rows, total_matching_count)` so a caller can build pagination
+        metadata without a second round trip.
+        """
+        conditions = []
+        if date_from is not None:
+            conditions.append(Prediction.created_at >= date_from)
+        if date_to is not None:
+            conditions.append(Prediction.created_at <= date_to)
+        if risk_category is not None:
+            conditions.append(Prediction.risk_category == risk_category)
+        if recommendation is not None:
+            conditions.append(Prediction.recommendation == recommendation)
+        if model_id is not None:
+            conditions.append(Prediction.model_id == model_id)
+
+        with get_session() as session:
+            count_stmt = select(func.count()).select_from(Prediction)
+            list_stmt = select(Prediction)
+            for condition in conditions:
+                count_stmt = count_stmt.where(condition)
+                list_stmt = list_stmt.where(condition)
+
+            total = int(session.execute(count_stmt).scalar_one())
+            list_stmt = (
+                list_stmt.order_by(Prediction.created_at.desc())
+                .offset((page - 1) * page_size)
+                .limit(page_size)
+            )
+            rows = session.execute(list_stmt).scalars().all()
+            return [_row_to_dict(row) for row in rows], total
 
 
 class DataQualityIssueRepository(BaseRepository[DataQualityIssue]):
