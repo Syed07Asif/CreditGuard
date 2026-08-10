@@ -58,11 +58,26 @@ checklist).
   fixed during this phase (an XGBoost/CUDA multiprocessing race, and a
   fresh-Postgres-volume test-database gap), and for the honest imbalance
   comparison result (class-weighting/resampling barely helped recall here
-  while visibly hurting raw calibration).
-- **Next up:** Phase 7 (credit scoring engine, risk categories and
-  explainability), per `CLAUDE.md`'s checklist. Phases are strictly
-  sequential — don't start Phase 7 work, and don't add stub files for it,
-  until the user actually asks.
+  while visibly hurting raw calibration). **Committed** (`7bd08c6`, "Phase
+  6: Model training, imbalance handling and evaluation") — the "not yet
+  committed" note above was accurate when first written, not anymore.
+- **Phase 7** (Credit scoring engine, risk categories and explainability) —
+  done, 260 tests total (117 new), ruff/black clean. `src/creditguard/
+  scoring/` (scorecard/categories/recommendation/engine) +
+  `src/creditguard/explain/` (shap_explainer/reason_codes) +
+  `config/scoring.yaml` + `docs/scoring_methodology.md`. Verified against
+  the real registered Phase 6 model: a low-risk fixture scored 900/
+  VERY_LOW/APPROVE and a high-risk fixture scored 300/VERY_HIGH/REJECT
+  (both p clipped to 0.0/1.0 by isotonic calibration on these
+  deliberately extreme synthetic fixtures), both under 500ms per-request
+  latency (79ms/31ms; the one-time model-load-and-pipeline-refit cost,
+  ~10-25s, is deliberately excluded from `ScoringResult.latency_ms` --
+  see "Scoring & explainability design" below). **Not yet committed** as
+  of this note — check `git status`/`git log` before assuming otherwise.
+- **Next up:** Phase 8 (FastAPI real-time scoring service), per
+  `CLAUDE.md`'s checklist. Phases are strictly sequential — don't start
+  Phase 8 work, and don't add stub files for it, until the user actually
+  asks.
 
 This is an educational/portfolio simulation (synthetic data only, not a real
 lending system), built one phase at a time with the user reviewing each phase's
@@ -365,6 +380,100 @@ together.
   every `gender_*`/`marital_status_*` coefficient came back effectively
   zero (0.000-0.010, vs. a max feature coefficient of 0.83) — a
   confirmatory result worth having actually checked, not just assumed.
+
+## Scoring & explainability design (Phase 7)
+
+`src/creditguard/scoring/` (scorecard -> categories -> recommendation ->
+engine) and `src/creditguard/explain/` (shap_explainer, reason_codes) turn
+Phase 6's calibrated probability into a score, a risk band, a traceable
+lending decision, and a plain-English explanation.
+
+- **`engine.score_application`'s `raw_input` is a flat, already-point-in-time
+  dict, not a `customer_id` to look up.** The Phase 7 brief lists "point-in-
+  time feature assembly" as its own step, which could have meant a second DB
+  lookup inside the engine (by `customer_id`, as of an application date).
+  Deliberately scoped narrower: `raw_input` carries the applicant's full
+  snapshot directly (demographics, loan terms, financial profile, bureau
+  fields), and "assembly" means shaping/validating that snapshot into the
+  same column layout `features.leakage.point_in_time_join` produces for
+  training -- not re-deriving it from the database. Fetching an *existing*
+  customer's latest snapshot from Postgres is left to Phase 8's API layer,
+  which is expected to call this function with the resolved snapshot. This
+  keeps the engine a plain, DB-lookup-free function of its input (per the
+  phase's own "no FastAPI, callable as a plain Python function" scope) and
+  matches how a real API request body would look.
+- **The feature pipeline is refit from scratch on every process's first
+  scoring call, not loaded from a persisted `feature_pipeline_*.joblib`
+  artifact.** A Phase 4-era artifact with that name already existed on disk
+  (`models/artifacts/feature_pipeline_ds_20260808_547ecf5a_feat.joblib`),
+  but it was written by `features.build`'s CLI under a filename tied to
+  whatever `--output` directory name was typed by hand, not to the
+  dataset_version Phase 6 actually trained the *registered* model on
+  (`..._clean`, with the suffix) -- the two don't reliably match, and
+  `model_registry` has no column recording which feature-pipeline artifact
+  a given model was trained against. Trusting that file would have risked
+  silently scoring through statistics (imputer medians, quantile bin edges,
+  one-hot categories) that don't match the active model's actual training
+  fit. Refitting via `build_feature_pipeline` + `merge_step.fit_transform`
+  + `pipeline[1:].fit` on the active model's own registered
+  `dataset_version` -- exactly what `models.train.load_training_data` does
+  -- guarantees an exact match by construction, at the cost of a one-time
+  ~10-25s reload per process (cached after that; see `reload_active_model`).
+  If Phase 8 finds this reload too slow for cold starts, the real fix is
+  giving `model_registry` a `feature_pipeline_path` column at promotion
+  time, not reaching for the stale Phase 4 artifact.
+- **SHAP explains the base (pre-calibration) model's log-odds output, not
+  the calibrated probability.** `CalibratedClassifierCV` (isotonic here) has
+  no closed-form structure for SHAP to decompose. `unwrap_base_estimator`
+  reaches through `calibrated_classifiers_[0].estimator.estimator` (the
+  `FrozenEstimator` wrapping the original fitted model, exactly one entry
+  since the base estimator is frozen rather than cross-validated) to get the
+  real `LogisticRegression`/tree object `LinearExplainer`/`TreeExplainer`
+  need. Calibration being a monotonic transform means a feature's direction
+  and relative importance survive it unchanged even though the raw SHAP
+  numbers are in log-odds space -- documented explicitly in
+  `docs/scoring_methodology.md` so this isn't a silent gap between what's
+  computed and what's shown.
+- **Reason-code sentences decouple the factual clause from the direction
+  clause on purpose.** Early design used one phrase pair per feature keyed
+  to "SHAP said risk-increasing" / "SHAP said risk-reducing" directly, which
+  would have made a sentence like "no previous defaults on record" get
+  attached to a row that actually *has* defaults, if SHAP's sign for that
+  particular row ever disagreed with the feature's usual direction (can't
+  happen for *this* linear model, since one global coefficient means sign
+  follows value deterministically -- but would be a real bug for a future
+  tree-based model with interactions). Fixed by keeping two independent
+  computations per sentence: a factual clause from the applicant's actual
+  value vs. the training-data portfolio median/mode (always true), and a
+  direction clause from this row's real SHAP sign (always accurate about
+  *this* application) -- see `explain.reason_codes.render_reason`.
+- **Real bug, caught only by running the two required demo fixtures against
+  the actual registered model, not by unit tests:** `interest_rate` was
+  templated with `format="percent"` like `dti`/`credit_utilization`, which
+  multiplies the raw value by 100 before appending "%". Unlike those ratio
+  features (stored as 0-1 fractions), `interest_rate` is already stored in
+  percentage-point units (`9.5` means 9.5%, per `docs/feature_dictionary.md`'s
+  documented 1-40 range) -- so a 9.5% loan was rendered as "950%". No unit
+  test caught this because the hand-built test fixtures for `reason_codes.py`
+  never exercised `interest_rate` specifically end-to-end. Fixed by adding a
+  distinct `rate_percent` format kind (append "%" without rescaling) and a
+  regression test (`test_render_reason_rate_percent_does_not_rescale`). A
+  reminder that even with full per-feature template coverage, running the
+  *actual* acceptance-criteria fixtures through the real pipeline still
+  finds bugs synthetic unit fixtures don't.
+- **The one-hot-to-source-feature mapping (`shap_explainer.
+  map_to_source_feature`) is prefix matching against the known categorical
+  column list, not introspection of the fitted `OneHotEncoder`'s internal
+  category/infrequent-bucket bookkeeping.** `OneHotEncoder(min_frequency=...)`
+  makes the exact output-category count per column data-dependent (some
+  categories fold into an `_infrequent_sklearn` bucket), which makes
+  reconstructing "how many output columns came from column N" from the
+  fitted encoder's own attributes fragile. Matching each encoded name
+  against `f"{column}_"` prefixes from `features.yaml`'s already-known
+  categorical column list is simpler and doesn't depend on encoder
+  internals -- ties broken by longest-prefix-match in case one categorical
+  column name is itself a prefix of another's (none currently are, but
+  tested anyway).
 
 ## How this project likes to be verified
 

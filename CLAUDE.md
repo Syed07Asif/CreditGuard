@@ -181,7 +181,7 @@ creditguard/
 - [x] **Phase 4** — Feature engineering and leakage prevention
 - [x] **Phase 5** — Exploratory data analysis
 - [x] **Phase 6** — Model training, imbalance handling and evaluation
-- [ ] **Phase 7** — Credit scoring engine, risk categories and explainability
+- [x] **Phase 7** — Credit scoring engine, risk categories and explainability
 - [ ] **Phase 8** — FastAPI real-time scoring service
 - [ ] **Phase 9** — Streamlit dashboard
 - [ ] **Phase 10** — Monitoring, drift, retraining, Docker and CI

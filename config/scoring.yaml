@@ -1,0 +1,88 @@
+# Credit scoring configuration for CreditGuard Phase 7.
+# Every tunable the scoring/explainability code uses lives here; nothing is
+# hard-coded in src/creditguard/scoring/*.py or src/creditguard/explain/*.py.
+# See docs/scoring_methodology.md for the full worked derivation.
+
+random_seed: 42
+
+# Points-to-double-odds scorecard transform (scoring.scorecard):
+#   odds  = (1 - p_default) / p_default        # odds of NOT defaulting
+#   score = OFFSET + FACTOR * ln(odds)
+#   FACTOR = pdo / ln(2)
+#   OFFSET = base_score - FACTOR * ln(base_odds)
+# base_odds is expressed as a single number (20 means "20:1 odds of not
+# defaulting", i.e. a 1-in-21 default probability, at exactly base_score).
+scorecard:
+  base_score: 600
+  base_odds: 20.0
+  pdo: 40.0
+  min_score: 300
+  max_score: 900
+
+# Risk category bands (scoring.categories). THESE ARE PROJECT-SPECIFIC RULES
+# CHOSEN FOR THIS SIMULATION, NOT A UNIVERSAL BANKING STANDARD -- see
+# docs/scoring_methodology.md. Bands must be contiguous, non-overlapping and
+# cover [scorecard.min_score, scorecard.max_score] exactly; validated at load
+# time by scoring.categories.load_risk_bands (raises ScoringConfigError
+# otherwise).
+risk_categories:
+  bands:
+    - name: VERY_LOW
+      min_score: 750
+      max_score: 900
+    - name: LOW
+      min_score: 700
+      max_score: 749
+    - name: MODERATE
+      min_score: 650
+      max_score: 699
+    - name: HIGH
+      min_score: 550
+      max_score: 649
+    - name: VERY_HIGH
+      min_score: 300
+      max_score: 549
+
+# Recommendation policy (scoring.recommendation). Decision is driven by BOTH
+# the calibrated probability (relative to the Phase 6 cost-optimal
+# threshold, read from the active model_registry row's
+# metrics.chosen_threshold -- not duplicated here) and the score band, plus
+# the hard/soft rules below.
+recommendation:
+  approve_score_min: 700
+  reject_score_max: 549 # score < 550 -> REJECT (matches the VERY_HIGH band)
+  # approve_probability_max = the active model's own registered
+  # chosen_threshold (Phase 6's expected-cost-minimising operating point):
+  # approving is only ever considered when the model itself would not flag
+  # the applicant as risky at all.
+  # reject_probability_max = chosen_threshold * reject_probability_multiplier
+  # -- a materially higher probability than the model's own risk-flagging
+  # boundary, so there is a genuine REVIEW band between the two thresholds
+  # rather than every flagged applicant being an automatic reject.
+  reject_probability_multiplier: 3.0
+
+  # Hard fails: any one of these forces REJECT outright, regardless of
+  # probability or score.
+  hard_fails:
+    previous_defaults_min: 2 # previous_defaults >= this
+    post_loan_dti_max: 0.60 # post_loan_dti > this
+    credit_utilization_max: 0.95 # credit_utilization > this
+    # Thin-file + high-leverage combination: both must hold together.
+    thin_file_employment_years_max: 0.5 # employment_years < this
+    thin_file_loan_to_income_min: 5.0 # AND loan_to_income > this
+
+  # Soft flags: any one of these forces REVIEW instead of APPROVE, even when
+  # the probability/score would otherwise clear the approve bar.
+  soft_flags:
+    thin_credit_file_months: 12 # credit_history_months < this
+    post_loan_dti_soft_min: 0.45 # post_loan_dti between soft_min and...
+    post_loan_dti_soft_max: 0.60 # ...soft_max (inclusive)
+    disposable_income_floor: 5000.0 # disposable_income (after proposed EMI) below this
+
+# Explainability (creditguard.explain.shap_explainer). The background/
+# reference sample is a stratified draw from the active model's training
+# split, persisted once as an artifact and reloaded rather than recomputed
+# per scoring request.
+explainability:
+  background_sample_size: 200
+  top_k_factors: 5
