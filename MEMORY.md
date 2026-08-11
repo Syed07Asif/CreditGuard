@@ -85,8 +85,7 @@ checklist).
   `loan_id`) that were filled in rather than silently worked around.
   Docker image built and smoke-tested directly (container starts, `/health`
   200 even with a failed model load, `/health/ready` correctly 503s without
-  volumes mounted). **Committed** (`<pending>` -- check `git log`, this
-  note was written before any commit was requested for this phase).
+  volumes mounted). **Committed** (`53bba7d`).
 - **Phase 9** (Streamlit dashboard) — done, 335 tests total (30 new),
   ruff/black clean. `src/creditguard/dashboard/` (app/api_client/state +
   components/{forms,cards,charts,tables} + pages/1-4) + `.streamlit/
@@ -94,14 +93,26 @@ checklist).
   extension to the already-committed Phase 8 API first (new `predictions`
   columns, a new `/model/performance` endpoint, `FactorDetail.
   benchmark_median`) -- see "Dashboard design (Phase 9)" below for why and
-  exactly what changed. Verified live in a browser against the real
-  registered model and real accumulated prediction traffic (108
-  predictions), not just the automated suite: all four pages render, the
-  high-risk sample scores 300/VERY_HIGH/REJECT end-to-end through the
-  live API, Portfolio Analytics renders real KPIs/segments/charts with
-  filters present, Model Performance shows the real backfilled metrics
-  matching `reports/models/model_card.md` exactly. **Committed
-  (`<pending>` -- check `git log`)**.
+  exactly what changed, including a real Streamlit-version gotcha found
+  live (this environment's installed Streamlit no longer auto-wires the
+  classic `pages/` directory into navigation -- fixed with the current
+  `st.navigation()`/`st.Page()` router API). Verified live in a browser
+  against the real registered model and real accumulated prediction
+  traffic (108 predictions), not just the automated suite: all four pages
+  render, the high-risk sample scores 300/VERY_HIGH/REJECT end-to-end
+  through the live API, Portfolio Analytics renders real KPIs/segments/
+  charts with filters present, Model Performance shows the real backfilled
+  metrics matching `reports/models/model_card.md` exactly. Two follow-up
+  fixes landed from live user testing after the initial commit: `docker/
+  Dockerfile.dashboard`'s `CMD` switched to JSON-array form (shell form
+  silently broke `docker stop` signal propagation -- caught by `docker
+  build`'s own linter, then reverified with a real `docker run` against
+  the live host API); and the Applicant Scoring form's separate "Annual
+  income" field was removed (`st.form` doesn't live-recalculate one field
+  from another, so it silently went stale against "Monthly income" until
+  submit surfaced a confusing API validation error -- now always derived
+  as `monthly_income * 12`). **Committed** (`2063c73`, `1bbb51d`,
+  `bc5fe3a`) and **pushed** to `origin/master`.
 - **Next up:** Phase 10 (Monitoring, drift, retraining, Docker and CI), per
   `CLAUDE.md`'s checklist. Phases are strictly sequential — don't start
   Phase 10 work, and don't add stub files for it, until the user actually
@@ -137,6 +148,36 @@ completion before moving on.
   (pytest only).
 - Docker Desktop shows two containers for this project: `creditguard_postgres`
   and `creditguard_mlflow` (mlflow on host port 5000, sqlite backend store).
+- **Docker Desktop's npipe/API can go briefly unresponsive on this machine
+  even while it later shows both containers as `Up (healthy)` once it
+  recovers** (seen 2026-08-11, distinct from the slower cold-start/
+  reinstall issues above): `docker ps`/`docker info` failed outright with
+  a pipe-connection error for a stretch, and a `uvicorn --reload` API
+  process that was running through it actually crashed (confirmed gone
+  via process listing, not just hung) because its in-flight DB connection
+  attempt during that window never got a clean failure to recover from.
+  The tell from the API side: `/health` stays `200` throughout (it never
+  touches the database), while `/health/ready` hangs or fails — that's
+  what to check first, not just re-running `docker ps`. Fix: confirm
+  `docker ps` and a direct `SELECT 1` (e.g. `docker exec
+  creditguard_postgres psql -U creditguard -d creditguard -c "SELECT 1"`)
+  both work again, then just restart the crashed `uvicorn` process --
+  Postgres itself doesn't need restarting.
+- **`uvicorn --reload` running in this user's VS Code integrated terminal
+  was observed shutting down cleanly (full graceful-shutdown log, not a
+  crash) moments after a fully successful startup, with no visible
+  intentional action in the terminal transcript** (2026-08-11) — cause
+  unconfirmed (possibly a stray Ctrl+C or focus/reuse behaviour in that
+  terminal), but worth knowing: if that process is later found sitting
+  idle back at the prompt, it just needs restarting, nothing else was
+  wrong with it.
+- **The Phase 9 dashboard needs both `API_BASE_URL` and `API_KEY` set as
+  environment variables before `streamlit run`** when started manually
+  (not through Docker, which bakes them in via `docker run -e`) — forgetting
+  `API_KEY` specifically is a real, easy-to-hit mistake: the dashboard
+  still loads and even shows 🟢 Connected in the sidebar (`/health` needs
+  no auth), but every actual page then fails with "API key was rejected,"
+  which reads like a deeper bug rather than a missing env var.
 
 ---
 
