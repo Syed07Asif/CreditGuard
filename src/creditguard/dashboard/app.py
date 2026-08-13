@@ -37,8 +37,9 @@ Use the pages in the left sidebar:
   distribution, risk/recommendation mix, and trends over time.
 - **Model Performance** -- the active model's evaluation metrics, curves and
   global feature importance.
-- **Monitoring** -- drift and data-quality monitoring (Phase 10; this page is a
-  placeholder layout until that phase lands).
+- **Monitoring** -- drift status, prediction-probability drift, rolling
+  performance and data-quality trends for the active model, computed by the
+  scheduled monitoring job (Phase 10).
 
 Every page here is a pure HTTP client of the Phase 8 API
 (`creditguard.dashboard.api_client`) -- nothing in this dashboard imports the

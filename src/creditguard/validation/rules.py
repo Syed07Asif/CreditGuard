@@ -49,6 +49,14 @@ class Scope(StrEnum):
 def record_key(table: str, df: pd.DataFrame) -> pd.Series:
     """Build the natural-key string for each row of `df` from `table`."""
     cols = KEY_COLUMNS[table]
+    if df.empty:
+        # pandas' .agg(func, axis=1) on a zero-row, multi-column frame
+        # can't infer the reduction produces one column per row and
+        # returns an empty DataFrame instead of a Series -- never hit by
+        # Phase 3's own tests (always non-empty generated datasets), but
+        # real once Phase 10 started validating genuinely empty windows
+        # of live production data.
+        return pd.Series(dtype=str)
     return df[cols].astype(str).agg("|".join, axis=1)
 
 

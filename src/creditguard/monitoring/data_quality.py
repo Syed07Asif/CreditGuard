@@ -66,9 +66,12 @@ def fetch_production_tables(
             ),
             conn,
         )
-        if loans.empty:
-            return {name: pd.DataFrame() for name in _EMPTY_TABLES}
-
+        # Deliberately no early return on an empty window: `.in_([])` still
+        # produces a valid (always-false) query, so every table below comes
+        # back as a correctly-columned empty DataFrame rather than the
+        # column-less `pd.DataFrame()` the old early-return path used to
+        # return -- which crashed `validation.rules.record_key` (it always
+        # selects each table's key columns, even when no rule fires).
         customer_ids = loans["customer_id"].unique().tolist()
         loan_ids = loans["loan_id"].tolist()
 
