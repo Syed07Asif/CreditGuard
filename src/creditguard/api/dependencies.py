@@ -11,14 +11,21 @@ from __future__ import annotations
 import time
 from threading import Lock
 
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends, HTTPException, Security, status
+from fastapi.security import APIKeyHeader
 
 from creditguard.config import get_settings
 
+# A real `SecurityBase` scheme (not a plain `Header(...)` parameter) is what
+# makes FastAPI register an entry in the OpenAPI `securitySchemes` -- which
+# is what makes Swagger UI (`/docs`) show the "Authorize" button at all.
+# `auto_error=False` so a missing header falls through to `require_api_key`'s
+# own check below, which raises a 401 with our own message/shape rather than
+# FastAPI's default one.
+_api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
-def require_api_key(
-    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
-) -> str:
+
+def require_api_key(x_api_key: str | None = Security(_api_key_header)) -> str:
     """Authenticate via the `X-API-Key` header against `settings.api_key`.
 
     Raises:
