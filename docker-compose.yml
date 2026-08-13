@@ -44,6 +44,110 @@ services:
       timeout: 5s
       retries: 10
 
+  # Phase 10: the real-time scoring API. Config is entirely env-var driven
+  # (`.env`, plus the `environment:` overrides below for the handful of
+  # values that must point at in-network service names rather than the
+  # host-oriented defaults `.env` uses for local, non-Docker development) --
+  # no secret is baked into this file.
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    image: creditguard-api:latest
+    container_name: creditguard_api
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+    ports:
+      - "8000:8000"
+    volumes:
+      - dataset_data:/app/data
+      - model_artifacts:/app/models
+      - reports_data:/app/reports
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mlflow:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # Phase 10: the Streamlit dashboard. Talks only to `api` over HTTP (no
+  # database/model-artifact volumes mounted -- Phase 9's "the dashboard is
+  # only ever a client of the API" rule holds in Docker too).
+  dashboard:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.dashboard
+    image: creditguard-dashboard:latest
+    container_name: creditguard_dashboard
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      API_BASE_URL: http://api:8000
+    ports:
+      - "8501:8501"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  # Phase 10: the scheduled monitoring job (drift/performance/data-quality
+  # checks on an interval -- see monitoring/scheduler.py). Shares the same
+  # dataset/model-artifact volumes as `api` (read-only in spirit, though not
+  # mounted read-only, since a future retraining run legitimately writes new
+  # challenger artifacts here too).
+  monitoring:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.monitoring
+    image: creditguard-monitoring:latest
+    container_name: creditguard_monitoring
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+    volumes:
+      - dataset_data:/app/data
+      - model_artifacts:/app/models
+      - reports_data:/app/reports
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mlflow:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
 volumes:
   postgres_data:
   mlflow_data:
+  # Shared between the api/monitoring containers (and, when training runs
+  # inside the stack -- see docs/deployment.md -- whatever container did
+  # that training). Model artifacts are generated output, never baked into
+  # an image (CLAUDE.md hard rule 1).
+  model_artifacts:
+  # Generated dataset parquet (data/raw, data/processed, data/features) --
+  # the API needs it to refit each active model's feature pipeline on its
+  # own training data (see scoring/engine.py), and monitoring needs it for
+  # the same reason plus retraining.
+  dataset_data:
+  reports_data:

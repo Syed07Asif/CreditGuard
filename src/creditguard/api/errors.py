@@ -154,12 +154,18 @@ def register_exception_handlers(app: FastAPI) -> None:
     order doesn't affect behaviour -- listed most- to least-specific here
     purely for readability.
     """
-    app.add_exception_handler(RequestValidationError, handle_request_validation_error)
-    app.add_exception_handler(ScoringInputError, handle_scoring_input_error)
+    # Starlette's own type stub for add_exception_handler expects every
+    # handler typed as Callable[[Request, Exception], ...] regardless of
+    # which exception type it's registered for -- dispatch at runtime is by
+    # the specific type given here (that's the whole point of registering
+    # per-type handlers), so these narrower handler signatures are correct
+    # in practice; only the stub's variance is imprecise for this pattern.
+    app.add_exception_handler(RequestValidationError, handle_request_validation_error)  # type: ignore[arg-type]
+    app.add_exception_handler(ScoringInputError, handle_scoring_input_error)  # type: ignore[arg-type]
     app.add_exception_handler(LeakageError, handle_service_unavailable)
     app.add_exception_handler(ScoringEngineError, handle_service_unavailable)
     app.add_exception_handler(ExplainabilityError, handle_service_unavailable)
-    app.add_exception_handler(LoanNotFoundError, handle_loan_not_found)
-    app.add_exception_handler(IntegrityError, handle_integrity_error)
-    app.add_exception_handler(HTTPException, handle_http_exception)
+    app.add_exception_handler(LoanNotFoundError, handle_loan_not_found)  # type: ignore[arg-type]
+    app.add_exception_handler(IntegrityError, handle_integrity_error)  # type: ignore[arg-type]
+    app.add_exception_handler(HTTPException, handle_http_exception)  # type: ignore[arg-type]
     app.add_exception_handler(Exception, handle_unexpected_error)

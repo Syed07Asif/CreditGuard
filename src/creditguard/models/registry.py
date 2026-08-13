@@ -64,20 +64,28 @@ def register_model(
     mlflow_run_id: str,
     artifact_path: str,
     model_id: str | None = None,
+    activate: bool = True,
 ) -> dict[str, Any]:
-    """Insert a new `model_registry` row as the active model, deactivating
-    whatever was previously active -- both in one transaction, so promotion
-    is atomic. Returns the newly-registered row as a dict.
+    """Insert a new `model_registry` row, active by default -- deactivating
+    whatever was previously active in the same transaction, so promotion is
+    atomic. Returns the newly-registered row as a dict.
+
+    `activate=False` (Phase 10's `monitoring.retraining`): register a
+    challenger model without touching the currently active champion at all
+    -- "does not auto-promote" per CLAUDE.md hard rule 6 and the Phase 10
+    brief. Call `activate_model(model_id)` later to promote it once it's
+    confirmed to beat the champion.
     """
     generated_id = (
         model_id or f"{algorithm}_{training_date:%Y%m%d%H%M%S}_{uuid.uuid4().hex[:8]}"
     )
     with get_session() as session:
-        session.execute(
-            update(ModelRegistry)
-            .where(ModelRegistry.is_active.is_(True))
-            .values(is_active=False)
-        )
+        if activate:
+            session.execute(
+                update(ModelRegistry)
+                .where(ModelRegistry.is_active.is_(True))
+                .values(is_active=False)
+            )
         existing_versions = list(
             session.execute(select(ModelRegistry.model_version)).scalars().all()
         )
@@ -92,9 +100,33 @@ def register_model(
             metrics=metrics,
             mlflow_run_id=mlflow_run_id,
             artifact_path=artifact_path,
-            is_active=True,
+            is_active=activate,
         )
         session.add(row)
+        session.flush()
+        return _row_to_dict(row)
+
+
+def activate_model(model_id: str) -> dict[str, Any]:
+    """Atomically deactivate whatever `model_registry` row is currently
+    active and activate `model_id` instead.
+
+    Used both internally by `register_model(activate=True)` (the default --
+    immediate promotion) and by `creditguard.monitoring.retraining` to
+    promote a challenger that was registered inactive
+    (`register_model(..., activate=False)`) once it's confirmed to beat the
+    champion, and by `rollback_to_version` to reactivate a prior version.
+    """
+    with get_session() as session:
+        session.execute(
+            update(ModelRegistry)
+            .where(ModelRegistry.is_active.is_(True))
+            .values(is_active=False)
+        )
+        row = session.execute(
+            select(ModelRegistry).where(ModelRegistry.model_id == model_id)
+        ).scalar_one()
+        row.is_active = True
         session.flush()
         return _row_to_dict(row)
 

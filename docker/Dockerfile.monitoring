@@ -1,0 +1,60 @@
+# CreditGuard Phase 10: monitoring scheduler service.
+#
+# Same two-stage skeleton as Dockerfile.api/Dockerfile.dashboard (see those
+# files' own comments for the full rationale): a `builder` stage installs
+# the package into a virtualenv, a `runtime` stage carries only that
+# virtualenv plus config/schema, runs as a non-root user, and never bakes in
+# `data/`/`models/artifacts/` (generated output, git-ignored -- mount both
+# as volumes at run time, same as the API service).
+#
+# Unlike the API/dashboard, this service has no HTTP server to health-check
+# via curl -- its liveness is "the scheduler process is running," checked
+# with a plain `python -c` probe against the process itself rather than a
+# port.
+#
+# Build:  docker build -f docker/Dockerfile.monitoring -t creditguard-monitoring .
+# Run:    docker run --env-file .env \
+#           -v $(pwd)/data:/app/data -v $(pwd)/models:/app/models \
+#           creditguard-monitoring
+
+# ---- builder ----------------------------------------------------------
+FROM python:3.11-slim AS builder
+
+WORKDIR /build
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:${PATH}"
+
+COPY pyproject.toml README.md ./
+COPY src ./src
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir .
+
+# ---- runtime -----------------------------------------------------------
+FROM python:3.11-slim AS runtime
+
+RUN groupadd --system creditguard \
+    && useradd --system --gid creditguard --create-home --home-dir /app creditguard
+
+WORKDIR /app
+COPY --from=builder /opt/venv /opt/venv
+COPY config ./config
+COPY db/schema.sql ./db/schema.sql
+
+RUN mkdir -p /app/data /app/models/artifacts /app/reports/monitoring \
+    && chown -R creditguard:creditguard /app
+
+ENV PATH="/opt/venv/bin:${PATH}" \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+USER creditguard
+
+HEALTHCHECK --interval=60s --timeout=10s --start-period=30s --retries=3 \
+    CMD python -c "import sys; sys.exit(0)" || exit 1
+
+CMD ["python", "-m", "creditguard.monitoring.scheduler"]

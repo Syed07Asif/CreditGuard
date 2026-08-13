@@ -1,0 +1,129 @@
+name: Docker
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+jobs:
+  build-and-smoke-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build api image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/Dockerfile.api
+          tags: creditguard-api:ci
+          push: false
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build dashboard image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/Dockerfile.dashboard
+          tags: creditguard-dashboard:ci
+          push: false
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build monitoring image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/Dockerfile.monitoring
+          tags: creditguard-monitoring:ci
+          push: false
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # No real secrets: CI's stack never talks to anything outside itself,
+      # per .env.example's "never commit a real .env" rule -- these values
+      # exist only for the lifetime of this job.
+      - name: Write CI .env
+        run: |
+          cat > .env <<'EOF'
+          DB_HOST=postgres
+          DB_PORT=5432
+          DB_NAME=creditguard
+          DB_USER=creditguard
+          DB_PASSWORD=ci-password
+          DB_SCHEMA=public
+          MLFLOW_TRACKING_URI=http://mlflow:5000
+          API_KEY=ci-smoke-test-key
+          ENV=prod
+          SEED=42
+          MODEL_DIR=models/artifacts
+          REPORTS_DIR=reports
+          DATA_DIR=data
+          RATE_LIMIT_RPM=100
+          CORS_ORIGINS=http://localhost:8501
+          MONITORING_INTERVAL_MINUTES=60
+          ALERT_WEBHOOK_URL=
+          API_HOST=0.0.0.0
+          API_PORT=8000
+          API_WORKERS=1
+          UVICORN_WORKERS=1
+          API_BASE_URL=http://api:8000
+          EOF
+
+      - name: Tag images for compose
+        run: |
+          docker tag creditguard-api:ci creditguard-api:latest
+          docker tag creditguard-dashboard:ci creditguard-dashboard:latest
+          docker tag creditguard-monitoring:ci creditguard-monitoring:latest
+
+      - name: Start the full stack
+        run: docker compose up -d postgres mlflow api dashboard monitoring
+
+      - name: Wait for postgres and mlflow to be healthy
+        run: |
+          for service in postgres mlflow; do
+            for i in $(seq 1 60); do
+              status=$(docker inspect --format='{{.State.Health.Status}}' "creditguard_${service}" 2>/dev/null || echo "starting")
+              if [ "$status" = "healthy" ]; then
+                echo "$service healthy"
+                break
+              fi
+              sleep 5
+            done
+          done
+
+      - name: Smoke test -- /health and /health/ready
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8000/health > /dev/null; then
+              echo "API /health OK"
+              break
+            fi
+            echo "waiting for API..."
+            sleep 5
+          done
+          curl -sf http://localhost:8000/health
+
+          # /health/ready legitimately returns 503 on a fresh stack with no
+          # model trained/registered yet (see docs/deployment.md) -- the
+          # smoke test asserts the endpoint responds with a well-formed
+          # readiness body, not that the service claims to be ready.
+          curl -s -o /tmp/ready.json -w "%{http_code}" http://localhost:8000/health/ready > /tmp/ready_status.txt
+          cat /tmp/ready.json
+          grep -q '"database"' /tmp/ready.json
+
+      - name: Show logs on failure
+        if: failure()
+        run: docker compose logs
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v

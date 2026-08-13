@@ -122,7 +122,7 @@ def high_correlation_pairs(
                 pairs.append(
                     {"feature_a": columns[i], "feature_b": columns[j], "r": float(r)}
                 )
-    return sorted(pairs, key=lambda p: -abs(p["r"]))
+    return sorted(pairs, key=lambda p: -abs(float(p["r"])))
 
 
 def point_biserial_correlations(

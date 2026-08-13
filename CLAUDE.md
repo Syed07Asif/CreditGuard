@@ -184,7 +184,7 @@ creditguard/
 - [x] **Phase 7** — Credit scoring engine, risk categories and explainability
 - [x] **Phase 8** — FastAPI real-time scoring service
 - [x] **Phase 9** — Streamlit dashboard
-- [ ] **Phase 10** — Monitoring, drift, retraining, Docker and CI
+- [x] **Phase 10** — Monitoring, drift, retraining, Docker and CI
 
 Phases are delivered one at a time and in order. Do not start a later phase until the
 current one is complete and its tests pass. Tick the box above when a phase is finished.

@@ -22,6 +22,8 @@ from creditguard.api.schemas import (
     PredictionListResponse,
     PredictionRequest,
     PredictionResponse,
+    Recommendation,
+    RiskCategory,
 )
 from creditguard.db.repository import PredictionRepository
 from creditguard.explain.reason_codes import render_reason
@@ -79,8 +81,8 @@ def build_prediction_response(
         loan_id=echo_loan_id,
         credit_score=result.credit_score,
         default_probability=round(result.default_probability, 4),
-        risk_category=result.risk_category,
-        recommendation=result.recommendation,
+        risk_category=RiskCategory(result.risk_category),
+        recommendation=Recommendation(result.recommendation),
         triggered_rules=result.triggered_rules,
         top_risk_factors=to_factor_details(result.top_risk_factors),
         top_positive_factors=to_factor_details(result.top_positive_factors),
@@ -151,8 +153,8 @@ def explain(payload: PredictionRequest, request: Request) -> ExplainResponse:
         loan_id=payload.loan_id,
         credit_score=result.credit_score,
         default_probability=round(result.default_probability, 4),
-        risk_category=result.risk_category,
-        recommendation=result.recommendation,
+        risk_category=RiskCategory(result.risk_category),
+        recommendation=Recommendation(result.recommendation),
         shap_base_value=detailed.shap_base_value,
         feature_contributions=feature_contributions,
         model_id=result.model_id,

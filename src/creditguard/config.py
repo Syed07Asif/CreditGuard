@@ -43,6 +43,15 @@ class Settings(BaseSettings):
     rate_limit_rpm: int = Field(default=100, alias="RATE_LIMIT_RPM")
     cors_origins: str = Field(default="http://localhost:8501", alias="CORS_ORIGINS")
 
+    # Phase 10 (Monitoring) -- operational/deployment tunables. Domain
+    # thresholds (PSI bands, degradation tolerance, retraining triggers, ...)
+    # live in config/monitoring.yaml instead, per this module's own
+    # env-vars-are-for-secrets-and-deployment-context convention.
+    monitoring_interval_minutes: int = Field(
+        default=60, alias="MONITORING_INTERVAL_MINUTES"
+    )
+    alert_webhook_url: str | None = Field(default=None, alias="ALERT_WEBHOOK_URL")
+
     @computed_field  # type: ignore[prop-decorator]
     @property
     def cors_origin_list(self) -> list[str]:

@@ -269,6 +269,28 @@ class ApiClient:
         """`GET /health/ready` -- readiness, unauthenticated."""
         return self._request("GET", "/health/ready")
 
+    # -- Phase 10: monitoring ------------------------------------------------
+
+    def monitoring_drift(self, model_id: str | None = None) -> dict[str, Any]:
+        """`GET /api/v1/monitoring/drift`."""
+        return self._request(
+            "GET", "/api/v1/monitoring/drift", params={"model_id": model_id}
+        )
+
+    def monitoring_performance(self, model_id: str | None = None) -> dict[str, Any]:
+        """`GET /api/v1/monitoring/performance`."""
+        return self._request(
+            "GET", "/api/v1/monitoring/performance", params={"model_id": model_id}
+        )
+
+    def monitoring_data_quality(self, window_days: int = 90) -> dict[str, Any]:
+        """`GET /api/v1/monitoring/data-quality`."""
+        return self._request(
+            "GET",
+            "/api/v1/monitoring/data-quality",
+            params={"window_days": window_days},
+        )
+
 
 def get_client() -> ApiClient:
     """One client per call -- cheap (no persistent connection state)."""
@@ -323,6 +345,21 @@ def cached_list_predictions(
 @st.cache_data(ttl=READ_CACHE_TTL_SECONDS, show_spinner=False)
 def cached_get_application(loan_id: str) -> dict[str, Any]:
     return get_client().get_application(loan_id)
+
+
+@st.cache_data(ttl=READ_CACHE_TTL_SECONDS, show_spinner=False)
+def cached_monitoring_drift(model_id: str | None = None) -> dict[str, Any]:
+    return get_client().monitoring_drift(model_id)
+
+
+@st.cache_data(ttl=READ_CACHE_TTL_SECONDS, show_spinner=False)
+def cached_monitoring_performance(model_id: str | None = None) -> dict[str, Any]:
+    return get_client().monitoring_performance(model_id)
+
+
+@st.cache_data(ttl=READ_CACHE_TTL_SECONDS, show_spinner=False)
+def cached_monitoring_data_quality(window_days: int = 90) -> dict[str, Any]:
+    return get_client().monitoring_data_quality(window_days)
 
 
 @st.cache_data(ttl=READ_CACHE_TTL_SECONDS, show_spinner=False)

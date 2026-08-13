@@ -66,4 +66,11 @@ def metrics(_api_key: str = Depends(enforce_rate_limit)) -> MetricsResponse:
     """Request count, error count, and p50/p95/p99 latency over the most
     recent requests (see `creditguard.api.middleware.MetricsStore`).
     """
-    return MetricsResponse(**metrics_store.snapshot())
+    snapshot = metrics_store.snapshot()
+    return MetricsResponse(
+        request_count=int(snapshot["request_count"]),
+        error_count=int(snapshot["error_count"]),
+        latency_p50_ms=float(snapshot["latency_p50_ms"]),
+        latency_p95_ms=float(snapshot["latency_p95_ms"]),
+        latency_p99_ms=float(snapshot["latency_p99_ms"]),
+    )

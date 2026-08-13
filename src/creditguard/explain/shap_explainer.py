@@ -343,7 +343,7 @@ def build_training_artifacts(
     -- `creditguard.scoring.engine`'s model cache calls this lazily on first
     use if the artifacts aren't already on disk), not per scoring request.
     """
-    tables = read_dataset_tables(dataset_version, data_dir)
+    tables = read_dataset_tables(dataset_version, Path(data_dir))
     train_ids, _val_ids, _test_ids = temporal_split(tables["loan_applications"])
     train_tables = filter_tables(tables, train_ids)
 

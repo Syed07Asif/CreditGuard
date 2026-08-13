@@ -1,0 +1,75 @@
+# Phase 10 monitoring configuration for CreditGuard.
+# Every tunable the drift/performance/data-quality/retraining code uses lives
+# here; nothing is hard-coded in src/creditguard/monitoring/*.py or
+# src/creditguard/pipeline/orchestrator.py.
+
+baseline:
+  # Decile edges (numeric features and the predicted-probability
+  # distribution) computed from the training split at model promotion.
+  n_deciles: 10
+  # Size of the reference sample persisted alongside the summary baseline
+  # stats, used for the two-sample KS test (PSI/chi-square only need the
+  # summary stats -- KS genuinely needs a second sample to compare against).
+  reference_sample_size: 5000
+
+drift:
+  # Population Stability Index bands (see monitoring/drift.py's psi_status):
+  # < psi_warning is OK, [psi_warning, psi_drift) is WARNING, >= psi_drift is DRIFT.
+  psi_warning: 0.10
+  psi_drift: 0.25
+  # Empty-bin floor for the PSI log/ratio -- an exactly-empty expected or
+  # actual bin would otherwise produce ln(0) or a division by zero. There is
+  # no single "correct" treatment in the literature; flooring both sides to
+  # this epsilon before computing the ratio is the conventional choice and
+  # keeps the statistic finite while still penalising the emptied/filled bin
+  # heavily.
+  epsilon: 1.0e-6
+  # Two-sided p-value threshold below which the KS / chi-square tests are
+  # read as DRIFT (rather than only reporting the raw statistic/p-value).
+  significance_level: 0.05
+  # How many days of production applications a single drift run looks back
+  # over, by default (the orchestrator's --monitor stage and scheduler.py
+  # both accept an override).
+  window_days: 30
+  # Confidence level for the concept-drift proxy's binomial CI on the
+  # rolling default rate among matured loans.
+  concept_drift_confidence: 0.95
+
+performance:
+  # Relative degradation tolerance: a metric is flagged only once it moves
+  # more than this fraction away from its training-time value (worse
+  # direction only -- ROC-AUC/PR-AUC/KS/precision/recall/calibration_slope
+  # dropping, or Brier rising).
+  degradation_tolerance: 0.10
+  metrics: [roc_auc, pr_auc, ks_statistic, brier_score, precision, recall, calibration_slope]
+  # Below this many matured (outcome-observed) loans in the window, metrics
+  # are still computed and reported but never used to trigger an alert or a
+  # retraining decision -- too small a sample to trust.
+  min_matured_loans: 30
+  window_days: 30
+
+data_quality:
+  # Share of rows flagged ERROR/WARNING by the Phase 3 rule engine, above
+  # which an alert fires.
+  violation_rate_warning: 0.02
+  violation_rate_alert: 0.05
+  window_days: 30
+
+retraining:
+  # FR-026 triggers -- should_retrain() returns True if ANY of these hold.
+  min_new_labeled_loans: 500
+  # A challenger must beat the champion's PR-AUC (on a common holdout) by at
+  # least this absolute margin to be eligible for promotion.
+  promotion_pr_auc_margin: 0.01
+  # A challenger's calibration slope must land within 1.0 +/- this tolerance
+  # to be considered "no worse" on calibration than a well-calibrated model.
+  calibration_slope_tolerance: 0.15
+
+alerts:
+  log_path: reports/monitoring/alerts.log
+  console: true
+
+scheduler:
+  # Default interval between monitoring runs inside the monitoring container.
+  # Overridable via the MONITORING_INTERVAL_MINUTES environment variable.
+  interval_minutes: 60

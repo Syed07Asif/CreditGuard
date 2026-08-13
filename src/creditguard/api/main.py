@@ -19,7 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from creditguard.api.errors import register_exception_handlers
 from creditguard.api.middleware import RequestContextMiddleware, configure_logging
-from creditguard.api.routes import applications, health, model, predict
+from creditguard.api.routes import applications, health, model, monitoring, predict
 from creditguard.config import get_settings
 from creditguard.scoring import engine
 
@@ -78,6 +78,7 @@ def create_app() -> FastAPI:
     app.include_router(predict.router, prefix=API_PREFIX)
     app.include_router(applications.router, prefix=API_PREFIX)
     app.include_router(model.router, prefix=API_PREFIX)
+    app.include_router(monitoring.router, prefix=API_PREFIX)
     # /health, /health/ready, /metrics are unversioned operational endpoints.
     app.include_router(health.router)
 

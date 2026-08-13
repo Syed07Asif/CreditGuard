@@ -10,6 +10,7 @@ the API response.
 from __future__ import annotations
 
 import json
+from typing import Any
 
 import streamlit as st
 
@@ -34,12 +35,14 @@ payload = forms.render_applicant_form()
 if payload is not None:
     client = get_client()
     with st.spinner("Scoring application..."):
+        prediction: dict[str, Any] | None
         try:
             prediction = client.predict(payload)
         except ApiClientError as exc:
             cards.render_api_error(exc, context="Scoring failed")
             prediction = None
         else:
+            explanation: dict[str, Any] | None
             try:
                 explanation = client.explain(payload)
             except ApiClientError:

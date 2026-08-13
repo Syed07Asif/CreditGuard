@@ -397,3 +397,55 @@ class ErrorResponse(BaseModel):
     request_id: str | None = None
     error: str
     detail: list[ErrorDetailItem] | None = None
+
+
+# -- Phase 10: monitoring -----------------------------------------------------
+# Every response below is read back from drift_reports/monitoring_metrics/
+# data_quality_issues -- rows already written by monitoring/scheduler.py's
+# periodic cycle or the pipeline orchestrator's --monitor stage -- never
+# recomputed on request, the same "thin transport layer" rule
+# ModelPerformanceResponse above already follows.
+
+
+class DriftFindingItem(BaseModel):
+    feature_name: str
+    method: str
+    baseline_stat: float
+    current_stat: float
+    drift_score: float
+    status: str
+    created_at: datetime
+
+
+class MonitoringDriftResponse(BaseModel):
+    model_id: str
+    findings: list[DriftFindingItem]
+    n_ok: int
+    n_warning: int
+    n_drift: int
+    latest_run_at: datetime | None = None
+
+
+class MonitoringMetricItem(BaseModel):
+    metric_name: str
+    metric_value: float
+    window_start: date
+    window_end: date
+    created_at: datetime
+
+
+class MonitoringPerformanceResponse(BaseModel):
+    model_id: str
+    metrics: list[MonitoringMetricItem]
+
+
+class DataQualityTrendItem(BaseModel):
+    rule_name: str
+    severity: str
+    day: date
+    n: int
+
+
+class MonitoringDataQualityResponse(BaseModel):
+    trend: list[DataQualityTrendItem]
+    total_issues: int
